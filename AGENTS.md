@@ -7,18 +7,19 @@ single source of truth; `CLAUDE.md` only points here. Read it before changing an
 
 Intent (Paresh, 2026-10-15): **Repo Museum** is a fun weekend project. Paste a public
 Git repo link and wander through creative exhibits built only from its git history.
-Exhibit I (the File Graveyard) is built; more exhibits come one at a time.
+Exhibit I (the File Graveyard) and Exhibit II (Code Fossils) are built; more
+exhibits come one at a time.
 
 - **Deferred:** deployment (not decided); caching of results (removed 2026-10-15, to
   be revisited later).
-- **Ideas, not built:** a commit "symphony", a subway map of branches, code fossils
-  (blame by year), Repo Wrapped stats. A "repo as a novel" idea would need an LLM,
+- **Ideas, not built:** a commit "symphony", a subway map of branches, Repo Wrapped
+  stats. A "repo as a novel" idea would need an LLM,
   which conflicts with the decision below, so ask before starting it.
 
 ## Status (as of 2026-10-15)
 
-Exhibit I works end to end locally. There are no automated tests, no CI and no git
-remote yet. Parked problems: see [KNOWN_ISSUES.md](KNOWN_ISSUES.md).
+Exhibits I and II work end to end locally. The only automated tests are server unit
+tests for the blame helpers (see "Testing"). There is no CI and no git remote yet. Parked problems: see [KNOWN_ISSUES.md](KNOWN_ISSUES.md).
 
 ## Commands
 
@@ -30,7 +31,9 @@ All run on 2026-10-15 with Node 24.18, npm 11.16, git 2.55 on Windows 11.
 - `npm run dev`: API on http://localhost:3001 (`node --watch`) plus Vite on
   http://localhost:5173, which proxies `/api` to the API. Open the Vite URL.
 - `npm run build`: `tsc --noEmit` plus `vite build` for `web/` only. **Use this as
-  the check.** The server is plain JavaScript with no typecheck, lint or tests.
+  the check**, together with `npm test -w server`. The server is plain JavaScript
+  with no typecheck or lint.
+- `npm test -w server`: `node --test`, the server unit tests in `server/test/`.
 - `npm run typecheck`: `tsc --noEmit` for `web/` only.
 - `npm start -w server`: the API alone, without watch mode.
 
@@ -42,11 +45,12 @@ needs Node 22+ and Vite 8 needs `^20.19 || >=22.12`. Only Node 24.18 has been ru
 
 - **Layout:** npm workspaces. `server/` is Express 5, ESM JavaScript. `web/` is
   Vite 8, React 19, TypeScript 7. No database.
-- **The only HTTP routes** (`server/src/index.js`): `GET /api/health`, and
-  `GET /api/graveyard?repo=<link>`. The second returns `GraveyardData` (shape in
-  `web/src/types.ts`; the server has no types, so keep the two in step by hand) or
-  `{ error }`. Messages meant for visitors are thrown as `UserError`
-  (`server/src/url.js`) with a status; anything else becomes a generic 500.
+- **The only HTTP routes** (`server/src/index.js`): `GET /api/health`,
+  `GET /api/graveyard?repo=<link>` and `GET /api/fossils?repo=<link>`. The exhibit
+  routes return `GraveyardData` or `FossilsData` (shapes in `web/src/types.ts`; the
+  server has no types, so keep the two in step by hand) or `{ error }`. Messages
+  meant for visitors are thrown as `UserError` (`server/src/url.js`) with a status;
+  anything else becomes a generic 500.
 - **Link handling:** `normalizeRepoUrl` (`server/src/url.js`) accepts `owner/repo`
   (meaning GitHub), a bare host path, a full URL, or a subfolder link on
   github.com, codeberg.org and bitbucket.org. Only https is allowed. Links with
@@ -55,12 +59,21 @@ needs Node 22+ and Vite 8 needs `^20.19 || >=22.12`. Only Node 24.18 has been ru
 - **All git calls go through `git()`** (`server/src/git.js`): an argument array (no
   shell), prompts and credential helpers disabled, only the https protocol allowed,
   a timeout and an output cap. Keep it that way: the input is a URL from a stranger.
-- **Pipeline** (`server/src/graveyard.js`): `git ls-remote` precheck (fails fast on
-  missing, private or empty repos), then a bare, single-branch, no-tags clone into
-  the OS temp dir, then one `git log` pass, then the clone is deleted. At most 2
-  clones run at once. Identical requests arriving together share one dig. Clone and
-  log time out at 3 minutes. Only the 5,000 most recent graves are returned
-  (`truncated: true` beyond that).
+- **Pipeline** (`dig()` in `server/src/dig.js`, shared by every exhibit): `git
+  ls-remote` precheck (fails fast on missing, private or empty repos), then a bare,
+  single-branch, no-tags clone into the OS temp dir, then the exhibit's own work on
+  the clone, then the clone is deleted. At most 2 clones run at once, across all
+  exhibits. Identical requests (same exhibit, same repo) arriving together share one
+  dig. The clone times out at 3 minutes.
+  - Graveyard (`server/src/graveyard.js`): one `git log` pass (3-minute timeout).
+    Only the 5,000 most recent graves are returned (`truncated: true` beyond that).
+  - Fossils (`server/src/fossils.js`): `git ls-tree` lists the files; lockfiles,
+    vendored, minified, binary and >256 KB files are skipped. Up to 400 files, picked
+    by a stable path hash so a repo gives the same sample every visit, are dated with
+    `git blame --porcelain -w HEAD` (4 at a time, 20 s per file). No new blame starts
+    after 60 s; `sample.complete` is false when not every eligible file was tried.
+    Measured 2026-10-15: ky 4 s, express 32 s (all 211 files), vite 78 s (400 of
+    2,715 files).
 - **The domain logic** is `parseHistory` (`server/src/history.js`): it walks
   `git log --topo-order --reverse -M --raw --numstat` and tracks each file's life.
   A/C is a birth, M/T a touch, R moves the life to a new path, D buries it.
@@ -68,9 +81,21 @@ needs Node 22+ and Vite 8 needs `^20.19 || >=22.12`. Only Node 24.18 has been ru
   branch) is ignored on purpose. `lifeNumber` counts re-creations at the same path.
   Checked on 2026-10-15 against expressjs/express: plain git shows 568 deletions,
   and the app returns 566 graves (the 2 difference is parallel-branch duplicates).
-- **Frontend:** the repo being viewed lives in the URL (`?repo=`), so graveyards can
-  be shared as links (`web/src/App.tsx`). Epitaph rules and date/lifespan wording
-  are in `web/src/lore.ts`. UI pieces are in `web/src/components/`.
+- **Fossils domain logic** is in `server/src/blame.js` (pure, unit-tested): which files
+  to date, parsing `git blame --porcelain` (commit details appear only on a commit's
+  first line), and which lines are fossils (code files first, at least 4 letters or
+  digits, one per file, duplicate texts dropped). Line age is the blame **author**
+  time, aggregated into UTC months (`layers`) and per-file runs of years (`cores`).
+  Checked on 2026-10-15: the `runs` for ky's `source/core/Ky.ts` match plain
+  `git blame -w` exactly.
+- **Frontend:** the repo and exhibit live in the URL (`?repo=…&exhibit=fossils`; no
+  `exhibit` means the graveyard, so older links still work), so exhibits can be
+  shared as links (`web/src/App.tsx`, exhibit list in `web/src/exhibits.ts`). While a
+  page is open, each exhibit's result for the current repo stays in React state, so
+  switching tabs doesn't clone again; reloading or changing repo fetches fresh.
+  Epitaph rules and date/lifespan wording are in `web/src/lore.ts`; strata banding,
+  stats and the age colour scale in `web/src/strata.ts`. UI pieces are in
+  `web/src/components/` (fossils in `components/fossils/`).
 - **Env vars:** only `PORT` (API port, default 3001). No `.env` file is used.
 
 ## Source-of-truth docs
@@ -118,14 +143,17 @@ Confirmed by Paresh on 2026-10-15. Don't undo these without asking.
 
 ## Testing
 
-There are **no automated tests** of any kind: no unit tests for `parseHistory` or
-`normalizeRepoUrl`, no frontend tests. `npm run build` (the web typecheck) is the
-only check, and it doesn't cover `server/`.
+`npm test -w server` runs `server/test/*.test.js` with `node:test` (no
+dependencies). Only `server/src/blame.js` is covered: there are no tests for
+`parseHistory`, `normalizeRepoUrl`, `fossils.js` or the frontend. `npm run build`
+is the web typecheck.
 
 How changes have been checked by hand: run `npm run dev`, then call the API through
 the proxy and compare against plain git, for example
 `curl "http://localhost:5173/api/graveyard?repo=expressjs/express"` against
-`git log -M --diff-filter=D --name-only --format= HEAD` in a bare clone. Nothing is
+`git log -M --diff-filter=D --name-only --format= HEAD` in a bare clone, or one
+file's `cores[].runs` from `/api/fossils` against `git blame --porcelain -w HEAD --
+<file>`. Nothing is
 destructive: the server writes only to OS temp folders, which it deletes.
 
 ## CI

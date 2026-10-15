@@ -21,6 +21,11 @@ export function plural(n: number, word: string): string {
   return `${n.toLocaleString()} ${word}${n === 1 ? '' : 's'}`;
 }
 
+/** A share as a whole percentage, without rounding a few lines down to "0%". */
+export function percent(share: number): string {
+  return share > 0 && share < 0.01 ? '<1%' : `${Math.round(share * 100)}%`;
+}
+
 export function formatDate(at: number): string {
   return new Date(at).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
 }
@@ -72,4 +77,13 @@ export const LOADING_LINES = [
   'Following files through their renames…',
   'Finding the ones that were deleted…',
   'Carving the tombstones…',
+];
+
+export const FOSSIL_LOADING_LINES = [
+  'Marking out the dig site…',
+  'Cloning the repository…',
+  'Drilling core samples…',
+  'Dating each line by its author…',
+  'Brushing the dust off the oldest finds…',
+  'Sorting the sediment into layers…',
 ];
