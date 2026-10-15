@@ -18,9 +18,9 @@ exhibits come one at a time.
 
 ## Status (as of 2026-10-15)
 
-Exhibits I and II work end to end locally. The server's parsing and link logic has
-unit tests, which CI runs on every pull request; the frontend has none (see
-"Testing"). The repo is public on GitHub; nothing is deployed. Parked problems: see
+Exhibits I and II work end to end locally. The server logic and the frontend's
+strata and lore logic have tests, which CI runs on every pull request; the network
+half of the clone pipeline and the React components don't (see "Testing"). The repo is public on GitHub; nothing is deployed. Parked problems: see
 [KNOWN_ISSUES.md](KNOWN_ISSUES.md).
 
 ## Commands
@@ -35,8 +35,9 @@ All run on 2026-10-15 with Node 24.18, npm 11.16, git 2.55 on Windows 11.
 - `npm run build`: `tsc --noEmit` plus `vite build` for `web/` only. **Use this as
   the check**, together with `npm test`; CI runs exactly these two. The server is
   plain JavaScript with no typecheck or lint.
-- `npm test`: runs `npm test -w server`, which is `node --test` over
-  `server/test/*.test.js`. Needs `git` on the PATH (see "Testing").
+- `npm test`: runs each workspace's tests with `node --test`: `server/test/**/*.test.js`
+  and `web/test/**/*.test.ts`. Needs `git` on the PATH (see "Testing").
+- `npm run coverage`: the same tests with Node's coverage report, per workspace.
 - `npm run typecheck`: `tsc --noEmit` for `web/` only.
 - `npm start -w server`: the API alone, without watch mode.
 
@@ -48,7 +49,8 @@ needs Node 22+ and Vite 8 needs `^20.19 || >=22.12`. Only Node 24.18 has been ru
 
 - **Layout:** npm workspaces. `server/` is Express 5, ESM JavaScript. `web/` is
   Vite 8, React 19, TypeScript 7. No database.
-- **The only HTTP routes** (`server/src/index.js`): `GET /api/health`,
+- **The only HTTP routes** (`createApp` in `server/src/app.js`; `index.js` only
+  listens): `GET /api/health`,
   `GET /api/graveyard?repo=<link>` and `GET /api/fossils?repo=<link>`. The exhibit
   routes return `GraveyardData` or `FossilsData` (shapes in `web/src/types.ts`; the
   server has no types, so keep the two in step by hand) or `{ error }`. Messages
@@ -67,13 +69,16 @@ needs Node 22+ and Vite 8 needs `^20.19 || >=22.12`. Only Node 24.18 has been ru
   single-branch, no-tags clone into the OS temp dir, then the exhibit's own work on
   the clone, then the clone is deleted. At most 2 clones run at once, across all
   exhibits. Identical requests (same exhibit, same repo) arriving together share one
-  dig. The clone times out at 3 minutes.
+  dig. The clone times out at 3 minutes. Each exhibit keeps its logic in a
+  `build…(repo, gitDir)` function and wraps it in `dig()` in a `get…(repo)` one, so
+  tests can run the logic on a local repo; new exhibits should follow the same split.
   - Graveyard (`server/src/graveyard.js`): one `git log` pass (3-minute timeout).
     Only the 5,000 most recent graves are returned (`truncated: true` beyond that).
   - Fossils (`server/src/fossils.js`): `git ls-tree` lists the files; lockfiles,
     vendored, minified, binary and >256 KB files are skipped. Up to 400 files, picked
     by a stable path hash so a repo gives the same sample every visit, are dated with
-    `git blame --porcelain -w HEAD` (4 at a time, 20 s per file). No new blame starts
+    `git blame --porcelain -w HEAD` (4 at a time, 20 s per file; results are sorted
+    afterwards so finishing order doesn't change the answer). No new blame starts
     after 60 s; `sample.complete` is false when not every eligible file was tried.
     Measured 2026-10-15: ky 4 s, express 32 s (all 211 files), vite 78 s (400 of
     2,715 files).
@@ -157,29 +162,56 @@ layout or wording don't need tests. A PR that changes logic without tests isn't
 ready to merge. To keep logic testable, put it in pure functions the tests can
 import (like `server/src/blame.js`), and have tests import app code, never copy it.
 
-`npm test` runs `server/test/*.test.js` with `node:test` (no dependencies): 23 tests
-on 2026-10-15, all passing.
+`npm test` uses Node's built-in `node:test` in both workspaces; there are no test
+dependencies. The web tests are TypeScript run directly by Node 24's type stripping,
+so they import with explicit `.ts` extensions, and only modules whose own imports are
+type-only (or carry `.ts` extensions) can be loaded. They sit in `web/test/`,
+outside `tsconfig.json`'s `include`, so `tsc` doesn't check them. On 2026-10-15:
+**73 tests, all passing** (54 server, 19 web).
+
+Server (`server/test/`):
 
 - `url.test.js`: `normalizeRepoUrl` (accepted link forms, per-host trimming and
   commit links, rejected schemes, credentials, ports, local and private-network
   hosts) and `fileUrl` (each host's format, path encoding).
-- `history.test.js`: `parseHistory` and `unquotePath` on hand-written log text,
-  plus end-to-end runs that build small git repos in the OS temp dir and read them
-  with the server's own `LOG_ARGS` through `git()`. They cover renames, deletion,
-  re-creation (`lifeNumber`), binary files, unusual paths, and the same deletion on
-  two branches. They need `git` on the PATH, write only to a temp folder they
-  delete, and take under a second. On Windows the unusual-path case drops the `"`
-  (not allowed in Windows file names); CI on Linux runs the full case.
+- `history.test.js`: `parseHistory` and `unquotePath`, on hand-written log text and
+  on real repos (renames, re-creation, binary files, unusual paths, the same
+  deletion on two branches). On Windows the unusual-path case drops the `"` (not
+  allowed in Windows file names); CI on Linux runs the full case.
+- `graveyard.test.js` / `fossils.test.js`: `buildGraveyard` and `buildFossils` end to
+  end on real repos (output shape, newest-first graves and the grave limit,
+  sampling, the file limit and time budget, skipped files), plus the pure
+  `pickSample`, `pickFossils` and `Strata`, including order independence.
+- `git.test.js`: the `git()` wrapper: stdout, non-zero exit, timeout, output cap,
+  a missing git binary (run in a child process), and that every transport except
+  https is refused, so a pasted link can't reach local files.
+- `dig.test.js`: `toUserError` (which git failures become 404/502/422 and which stay
+  500s), `withDigSlot` (at most 2 clones at once, slots freed on failure) and
+  `headFromLsRemote`.
+- `app.test.js`: the HTTP routes with fake exhibits: health, routing, 400 for bad
+  links, `UserError` status, and a generic 500 that leaks no details.
 - `blame.test.js`: the pure fossil helpers in `server/src/blame.js`.
+- `helpers/git-repo.js`: builds throwaway repos with fixed authors and dates in the
+  OS temp dir, deleted after each test file. Use it for any test that needs a repo.
+
+Web (`web/test/`): `strata.test.ts` (banding, grain choice, half-life and share
+stats, age colours) and `lore.test.ts` (epitaph rules in priority order, lifespan,
+plural, percent and date wording).
+
+Coverage (`npm run coverage`, 2026-10-15): server 94.5% of lines; every file at
+100% except `dig.js` 70%, `graveyard.js` 88% and `fossils.js` 97%. Web: `lore.ts`
+and `strata.ts` 100%. Node only reports files the tests import, so those web
+numbers don't include the components.
 
 Checked on 2026-10-15 that the tests catch real bugs: removing the parallel-branch
-check, dropping `formerNames` on rename, or allowing `169.254.x.x` each made a test
-fail.
+check, dropping `formerNames` on rename, allowing `169.254.x.x`, or removing the
+order-independence sort in `Strata` each made a test fail.
 
-**Not covered:** the orchestration in `graveyard.js`, `fossils.js` and `dig.js`
-(cloning, sampling, time budgets), the `git()` wrapper, the HTTP routes, and all of
-`web/` (`lore.ts`, `strata.ts`, components). There is no frontend test runner yet;
-adding one is the first step before testing `web/` logic. The hostname-only
+**Not covered:** the network half of the pipeline: `dig()`, `remoteHead` and the
+clone (`dig.js`), and the `getGraveyard`/`getFossils` wrappers. `git()` allows only
+https, so tests can't clone a local repo. Also the "skip a file whose blame fails"
+path in `fossils.js`, all React components, `exhibits.ts` (its import of `./lore`
+has no `.ts` extension, so Node can't load it), and `motion.ts`. The hostname-only
 private-network gap (KNOWN_ISSUES.md) is not tested because it isn't fixed.
 
 How changes have been checked by hand: run `npm run dev`, then call the API through
