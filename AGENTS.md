@@ -246,10 +246,14 @@ destructive: the server writes only to OS temp folders, which it deletes.
 
 ## CI
 
-`.github/workflows/ci.yml` runs one job, `checks` (Ubuntu, Node 24): `npm ci`, then
-`npm run typecheck`, `npm run build` and `npm test`. It runs on every pull request, whatever the base
-branch (so stacked PRs are checked too), and on every push to `main`. `checks` is the
-required status check for merging into `main` (see "Git"). There is no deploy job.
+`.github/workflows/ci.yml` runs three parallel jobs (Ubuntu, Node 24), each with its
+own `npm ci` and each shown as its own check on a PR: `typecheck` (`npm run
+typecheck`), `build` (`npm run build`) and `test` (`npm test`). They run on every pull
+request, whatever the base branch (so stacked PRs are checked too), and on every push
+to `main`. All three are required status checks for merging into `main` (see "Git").
+If you rename or add a job, update the required checks in GitHub's branch protection
+in the same change, or PRs will wait forever for a check that never reports. There is
+no deploy job.
 
 ## Git
 
@@ -263,7 +267,7 @@ are merged on GitHub with a merge commit (PR #1).
   `.githooks/pre-commit` (rejects commits while on `main`) and `.githooks/pre-push`
   (rejects pushes to `main`), which `npm install` activates. Both were tested on
   2026-10-15. Hooks can be skipped with `--no-verify`, so GitHub branch protection on
-  `main` is the real guard: a pull request is required, the `checks` CI job must
+  `main` is the real guard: a pull request is required, the `typecheck`, `build` and `test` CI jobs must
   pass, and force-pushes and deletion are blocked. It applies to admins too, and no
   approving review is required (solo project).
 - **Commit messages (Paresh, 2026-10-15):** subject `<type>(<scope>): <short
