@@ -8,7 +8,7 @@ Paste a public Git repository and wander through exhibits built from its history
 
 ## Run it
 
-Requires Node 22.12+ and `git` on your PATH.
+Requires Node 22.18+ (the server and tests are TypeScript that Node runs directly) and `git` on your PATH.
 
 ```sh
 npm install
@@ -17,13 +17,13 @@ npm run dev
 
 Open http://localhost:5173. The API runs on http://localhost:3001; Vite proxies `/api` to it.
 
-Checks: `npm run build` (web typecheck and build) and `npm test` (server and web tests). CI runs both on every pull request. `npm run coverage` shows test coverage.
+Checks: `npm run typecheck` (strict TypeScript, both workspaces), `npm run build` (web build) and `npm test` (server and web tests). CI runs all three on every pull request. `npm run coverage` shows test coverage.
 
 ## How it works
 
-- `server/`: Express. For each request it runs `git ls-remote` (fails fast on missing, private or empty repos), does a bare, single-branch clone into a temp folder, runs the exhibit's git commands, and deletes the clone (`dig.js`).
-  - Graveyard: one `git log --raw --numstat -M` pass. `history.js` walks it oldest-first, tracking each file through births, renames and deletions.
-  - Fossils: `git blame --porcelain -w` on each text file (`fossils.js`, `blame.js`). Big repos are sampled: up to 400 files, the same ones every visit, within about a minute.
+- `server/`: Express in strict TypeScript, run directly by Node (no build step); its `api-types.ts` defines the JSON the frontend receives. For each request it runs `git ls-remote` (fails fast on missing, private or empty repos), does a bare, single-branch clone into a temp folder, runs the exhibit's git commands, and deletes the clone (`dig.ts`).
+  - Graveyard: one `git log --raw --numstat -M` pass. `history.ts` walks it oldest-first, tracking each file through births, renames and deletions.
+  - Fossils: `git blame --porcelain -w` on each text file (`fossils.ts`, `blame.ts`). Big repos are sampled: up to 400 files, the same ones every visit, within about a minute.
   - Nothing is cached: every visit clones fresh.
   - At most 2 clones run at once; clones and logs time out after 3 minutes.
 - `web/`: Vite + React + TypeScript. The repo and exhibit are kept in the URL (`?repo=owner/repo&exhibit=fossils`), so any exhibit can be shared as a link.
