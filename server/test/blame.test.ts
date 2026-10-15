@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { isCodeFile, isFossilCandidate, isMeaningful, parseBlame, parseTree } from '../src/blame.js';
+import { isCodeFile, isFossilCandidate, isMeaningful, parseBlame, parseTree } from '../src/blame.ts';
 
 const A = 'a'.repeat(40);
 const B = 'b'.repeat(40);
 
-const header = (author, seconds, summary) =>
+const header = (author: string, seconds: number, summary: string) =>
   [`author ${author}`, `author-mail <${author}@x>`, `author-time ${seconds}`, 'author-tz +0000', `summary ${summary}`, 'filename f.js'];
 
 test('parseBlame reads commit details once and reuses them for later lines', () => {
@@ -24,7 +24,9 @@ test('parseBlame reads commit details once and reuses them for later lines', () 
     '',
   ].join('\n');
 
-  const { commits, lines } = parseBlame(text);
+  const blame = parseBlame(text);
+  assert.ok(blame);
+  const { commits, lines } = blame;
   assert.equal(commits.size, 2);
   assert.deepEqual(commits.get(A), { hash: A, author: 'Ada', at: 1_000_000_000_000, message: 'first' });
   assert.deepEqual(
@@ -41,7 +43,7 @@ test('parseBlame reads commit details once and reuses them for later lines', () 
 test('parseBlame keeps tabs inside line content and sorts by final line', () => {
   const text = [`${B} 1 2 1`, ...header('Grace', 1, 's'), '\t\tindented', `${A} 1 1 1`, ...header('Ada', 2, 't'), '\ttop', ''].join('\n');
   assert.deepEqual(
-    parseBlame(text).lines.map((l) => l.text),
+    parseBlame(text)?.lines.map((l) => l.text),
     ['top', '\tindented'],
   );
 });
@@ -62,7 +64,7 @@ test('parseTree reads blobs, including paths with spaces, and skips submodules',
 });
 
 test('isFossilCandidate keeps hand-written text and drops generated, vendored or binary files', () => {
-  const ok = (path, size = 100, mode = '100644') => isFossilCandidate({ path, size, mode });
+  const ok = (path: string, size = 100, mode = '100644') => isFossilCandidate({ path, size, mode });
   assert.equal(ok('src/index.js'), true);
   assert.equal(ok('Makefile'), true);
   assert.equal(ok('package-lock.json'), false);

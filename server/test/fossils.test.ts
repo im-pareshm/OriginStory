@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { hashString } from '../src/blame.js';
-import { buildFossils, pickFossils, pickSample, Strata } from '../src/fossils.js';
-import { normalizeRepoUrl } from '../src/url.js';
-import { createRepo, lines } from './helpers/git-repo.js';
+import type { CommitEvent, Fossil } from '../src/api-types.ts';
+import { type Blame, hashString } from '../src/blame.ts';
+import { buildFossils, pickFossils, pickSample, Strata } from '../src/fossils.ts';
+import { normalizeRepoUrl } from '../src/url.ts';
+import { createRepo, type TestRepo } from './helpers/git-repo.ts';
 
-const seconds = (y, m, d) => Date.UTC(y, m - 1, d) / 1000;
+const seconds = (y: number, m: number, d: number) => Date.UTC(y, m - 1, d) / 1000;
 
 // ---------------------------------------------------------------------------
 // Pure pieces
@@ -21,7 +22,15 @@ test('pickSample takes the same paths whatever order they arrive in, up to the l
   assert.deepEqual(pickSample(['b', 'a'], 10).sort(), ['a', 'b'], 'small repos are taken whole');
 });
 
-const fossil = (path, year, text = `${path} line`) => ({ path, line: 1, text, commit: { at: Date.UTC(year, 0, 1) } });
+const commitAt = (author: string, at: number): CommitEvent => ({ hash: `${author}-${at}`, author, at, message: 'm' });
+
+const fossil = (path: string, year: number, text = `${path} line`): Fossil => ({
+  path,
+  line: 1,
+  text,
+  commit: commitAt('Ada', Date.UTC(year, 0, 1)),
+  url: null,
+});
 
 test('pickFossils puts code before config and docs, then oldest first', () => {
   const picked = pickFossils([
@@ -47,15 +56,24 @@ test('pickFossils shows a line that survives in many files once, and stops at th
   assert.equal(pickFossils(Array.from({ length: 20 }, (_, i) => fossil(`f${i}.js`, 2000 + i)), 5).length, 5);
 });
 
+type BlameEntry = [author: string, at: number, text: string];
+
 /** A parsed blame, in the shape parseBlame returns. */
-function blame(entries) {
-  const commits = new Map();
+function blame(entries: BlameEntry[]): Blame {
+  const commits = new Map<string, CommitEvent>();
   const lines = entries.map(([author, at, text], i) => {
-    const sha = `${author}-${at}`;
-    commits.set(sha, { hash: sha, author, at, message: 'm' });
-    return { sha, line: i + 1, text };
+    const commit = commitAt(author, at);
+    commits.set(commit.hash, commit);
+    return { sha: commit.hash, line: i + 1, text };
   });
   return { commits, lines };
+}
+
+/** The only core of a Strata that was given one file. */
+function onlyCore(strata: Strata) {
+  const [core] = strata.orderedCores();
+  assert.ok(core);
+  return core;
 }
 
 test('Strata groups lines into UTC months and per-file runs of years', () => {
@@ -75,14 +93,14 @@ test('Strata groups lines into UTC months and per-file runs of years', () => {
     { month: '2019-02', lines: 2, authors: [['Ada', 2]] },
     { month: '2021-06', lines: 1, authors: [['Grace', 1]] },
   ]);
-  const [core] = strata.orderedCores();
+  const core = onlyCore(strata);
   assert.equal(core.lines, 4);
   assert.deepEqual(core.runs, [
     [2019, 2],
     [2021, 1],
     [2019, 1],
   ]);
-  assert.equal(core.oldest.text, 'const first = 1;');
+  assert.equal(core.oldest?.text, 'const first = 1;');
 });
 
 test('Strata never picks a punctuation-only line as the oldest fossil', () => {
@@ -94,16 +112,16 @@ test('Strata never picks a punctuation-only line as the oldest fossil', () => {
       ['Ada', Date.UTC(2015, 0, 1), 'return value;'],
     ]),
   );
-  assert.equal(strata.orderedCores()[0].oldest.text, 'return value;');
+  assert.equal(onlyCore(strata).oldest?.text, 'return value;');
 
   const onlyBraces = new Strata();
   onlyBraces.add('c.js', blame([['Ada', Date.UTC(2010, 0, 1), '});']]));
-  assert.equal(onlyBraces.orderedCores()[0].oldest, null);
+  assert.equal(onlyCore(onlyBraces).oldest, null);
 });
 
 test('Strata gives the same answer whatever order the blames finish in', () => {
   const at = Date.UTC(2020, 2, 1);
-  const files = [
+  const files: [path: string, blame: Blame][] = [
     ['z.js', blame([['Zoe', at, 'zeta']])],
     ['a.js', blame([['Ann', at, 'alpha']])],
     ['m.js', blame([['Max', at, 'mu mu']])],
@@ -114,7 +132,7 @@ test('Strata gives the same answer whatever order the blames finish in', () => {
   for (const [path, b] of [...files].reverse()) backwards.add(path, b);
 
   assert.deepEqual(forwards.layers(), backwards.layers());
-  assert.deepEqual(forwards.layers()[0].authors, [
+  assert.deepEqual(forwards.layers()[0]?.authors, [
     ['Ann', 1],
     ['Max', 1],
     ['Zoe', 1],
@@ -129,13 +147,14 @@ test('Strata gives the same answer whatever order the blames finish in', () => {
 test('Strata keeps the top five authors of a month, most lines first', () => {
   const at = Date.UTC(2020, 0, 1);
   const strata = new Strata();
-  const entries = [];
-  for (const [name, count] of [['A', 6], ['B', 5], ['C', 4], ['D', 3], ['E', 2], ['F', 1]]) {
+  const entries: BlameEntry[] = [];
+  const counts: [name: string, count: number][] = [['A', 6], ['B', 5], ['C', 4], ['D', 3], ['E', 2], ['F', 1]];
+  for (const [name, count] of counts) {
     for (let i = 0; i < count; i++) entries.push([name, at, `line by ${name}`]);
   }
   strata.add('x.js', blame(entries));
   assert.deepEqual(
-    strata.layers()[0].authors.map(([name]) => name),
+    strata.layers()[0]?.authors.map(([name]) => name),
     ['A', 'B', 'C', 'D', 'E'],
   );
 });
@@ -146,7 +165,7 @@ test('Strata keeps the top five authors of a month, most lines first', () => {
 
 const repoLink = normalizeRepoUrl('museum/example');
 
-function digSite(name) {
+function digSite(name: string): TestRepo {
   const repo = createRepo(name);
   repo.write('src/old.js', 'const ancient = 1;\nfunction keep() {\n  return ancient;\n}\n');
   repo.write('README.md', '# Example project\n');
@@ -189,8 +208,8 @@ test('buildFossils dates every line of the eligible files and finds the fossils'
       ['README.md', 1, '# Example project'],
     ],
   );
-  assert.equal(data.fossils[0].url, `https://github.com/museum/example/blob/${repo.head()}/src/old.js#L1`);
-  assert.equal(data.fossils[0].commit.author, 'Ada');
+  assert.equal(data.fossils[0]?.url, `https://github.com/museum/example/blob/${repo.head()}/src/old.js#L1`);
+  assert.equal(data.fossils[0]?.commit.author, 'Ada');
 });
 
 test('buildFossils marks the sample incomplete when the file limit or time budget cuts it short', async () => {

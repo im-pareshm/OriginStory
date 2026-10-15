@@ -23,7 +23,7 @@ place** · **Fix plan** (the last step is always "delete this entry") · **Since
 private or loopback address passes the check, and the server will try to clone
 from it. A redirect from a public host to an internal one is not checked either.
 
-**Cause.** `isPrivateHost` in `server/src/url.js` inspects only the text of the
+**Cause.** `isPrivateHost` in `server/src/url.ts` inspects only the text of the
 hostname. Nothing resolves the name or checks the address git actually connects to.
 Found by reading the code on 2026-10-15; not exploited or tested.
 

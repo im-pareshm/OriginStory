@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { buildGraveyard } from '../src/graveyard.js';
-import { normalizeRepoUrl } from '../src/url.js';
-import { createRepo, DAY, lines, START } from './helpers/git-repo.js';
+import { buildGraveyard } from '../src/graveyard.ts';
+import { normalizeRepoUrl } from '../src/url.ts';
+import { createRepo, DAY, lines, START } from './helpers/git-repo.ts';
 
 const repoLink = normalizeRepoUrl('museum/example');
 

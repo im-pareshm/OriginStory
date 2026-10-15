@@ -30,41 +30,53 @@ All run on 2026-10-15 with Node 24.18, npm 11.16, git 2.55 on Windows 11.
 - `npm install`: installs both workspaces. Its `prepare` step runs
   `scripts/install-hooks.mjs`, which sets `core.hooksPath=.githooks` and
   `commit.template=.gitmessage` (see "Git").
-- `npm run dev`: API on http://localhost:3001 (`node --watch`) plus Vite on
-  http://localhost:5173, which proxies `/api` to the API. Open the Vite URL.
-- `npm run build`: `tsc --noEmit` plus `vite build` for `web/` only. **Use this as
-  the check**, together with `npm test`; CI runs exactly these two. The server is
-  plain JavaScript with no typecheck or lint.
-- `npm test`: runs each workspace's tests with `node --test`: `server/test/**/*.test.js`
+- `npm run dev`: API on http://localhost:3001 (`node --watch src/index.ts`) plus Vite
+  on http://localhost:5173, which proxies `/api` to the API. Open the Vite URL. Run it
+  from the repo root; inside `server/` it starts only the API.
+- `npm run typecheck`: strict `tsc` for both workspaces, source and tests: `server/`
+  (`tsc -p .`) and `web/` (`tsc -p .`, then `tsc -p test` for the web tests).
+- `npm run build`: `tsc --noEmit` plus `vite build` for `web/`.
+- `npm test`: runs each workspace's tests with `node --test`: `server/test/**/*.test.ts`
   and `web/test/**/*.test.ts`. Needs `git` on the PATH (see "Testing").
+- **The check before every commit is `npm run typecheck && npm run build && npm test`**;
+  CI runs exactly these three.
 - `npm run coverage`: the same tests with Node's coverage report, per workspace.
-- `npm run typecheck`: `tsc --noEmit` for `web/` only.
-- `npm start -w server`: the API alone, without watch mode.
+- `npm start -w server`: the API alone, without watch mode (`node src/index.ts`).
 
-Node requirement: `>=22.12` (root `package.json` `engines`), because concurrently 10
-needs Node 22+ and Vite 8 needs `^20.19 || >=22.12`. Only Node 24.18 has been run.
-`git` must be on the PATH: the server runs it.
+Node requirement: `>=22.18` (root `package.json` `engines`): the server and all tests
+are TypeScript that Node runs directly, which needs Node's type stripping, on by default
+from 22.18. (concurrently 10 needs Node 22+ and Vite 8 `^20.19 || >=22.12`, both met.)
+Only Node 24.18 has been run. `git` must be on the PATH: the server runs it.
 
 ## Key implementation facts
 
-- **Layout:** npm workspaces. `server/` is Express 5, ESM JavaScript. `web/` is
-  Vite 8, React 19, TypeScript 7. No database.
-- **The only HTTP routes** (`createApp` in `server/src/app.js`; `index.js` only
+- **Layout:** npm workspaces. `server/` is Express 5 in TypeScript; `web/` is Vite 8,
+  React 19, TypeScript. Both use TypeScript 7 in strict mode. No database.
+- **TypeScript without a build step:** Node runs the server's `.ts` files directly
+  (type stripping); `tsc` only type-checks, and nothing is emitted. So the server can
+  only use TypeScript that erases to plain JavaScript: no `enum`, `namespace` or
+  constructor parameter properties (`erasableSyntaxOnly` enforces this), type-only
+  imports written `import type` (`verbatimModuleSyntax`), and relative imports with
+  their `.ts` extension. `server/tsconfig.json` adds `noUncheckedIndexedAccess`,
+  `noImplicitReturns`, `noImplicitOverride` and `noFallthroughCasesInSwitch` on top of
+  `strict`; `web/tsconfig.json` is `strict` without those four.
+- **The only HTTP routes** (`createApp` in `server/src/app.ts`; `index.ts` only
   listens): `GET /api/health`,
   `GET /api/graveyard?repo=<link>` and `GET /api/fossils?repo=<link>`. The exhibit
-  routes return `GraveyardData` or `FossilsData` (shapes in `web/src/types.ts`; the
-  server has no types, so keep the two in step by hand) or `{ error }`. Messages
-  meant for visitors are thrown as `UserError` (`server/src/url.js`) with a status;
-  anything else becomes a generic 500.
-- **Link handling:** `normalizeRepoUrl` (`server/src/url.js`) accepts `owner/repo`
+  routes return `GraveyardData` or `FossilsData`, or `ApiError` (`{ error }`).
+  **Those shapes are defined once, in `server/src/api-types.ts`**; `web/src/types.ts`
+  only re-exports them, so a change on either side that breaks the contract fails
+  `npm run typecheck`. Messages meant for visitors are thrown as `UserError`
+  (`server/src/url.ts`) with a status; anything else becomes a generic 500.
+- **Link handling:** `normalizeRepoUrl` (`server/src/url.ts`) accepts `owner/repo`
   (meaning GitHub), a bare host path, a full URL, or a subfolder link on
   github.com, codeberg.org and bitbucket.org. Only https is allowed. Links with
   credentials, custom ports, localhost or private IPs are rejected (the private-IP
   check has a gap; see KNOWN_ISSUES.md).
-- **All git calls go through `git()`** (`server/src/git.js`): an argument array (no
+- **All git calls go through `git()`** (`server/src/git.ts`): an argument array (no
   shell), prompts and credential helpers disabled, only the https protocol allowed,
   a timeout and an output cap. Keep it that way: the input is a URL from a stranger.
-- **Pipeline** (`dig()` in `server/src/dig.js`, shared by every exhibit): `git
+- **Pipeline** (`dig()` in `server/src/dig.ts`, shared by every exhibit): `git
   ls-remote` precheck (fails fast on missing, private or empty repos), then a bare,
   single-branch, no-tags clone into the OS temp dir, then the exhibit's own work on
   the clone, then the clone is deleted. At most 2 clones run at once, across all
@@ -72,9 +84,9 @@ needs Node 22+ and Vite 8 needs `^20.19 || >=22.12`. Only Node 24.18 has been ru
   dig. The clone times out at 3 minutes. Each exhibit keeps its logic in a
   `build…(repo, gitDir)` function and wraps it in `dig()` in a `get…(repo)` one, so
   tests can run the logic on a local repo; new exhibits should follow the same split.
-  - Graveyard (`server/src/graveyard.js`): one `git log` pass (3-minute timeout).
+  - Graveyard (`server/src/graveyard.ts`): one `git log` pass (3-minute timeout).
     Only the 5,000 most recent graves are returned (`truncated: true` beyond that).
-  - Fossils (`server/src/fossils.js`): `git ls-tree` lists the files; lockfiles,
+  - Fossils (`server/src/fossils.ts`): `git ls-tree` lists the files; lockfiles,
     vendored, minified, binary and >256 KB files are skipped. Up to 400 files, picked
     by a stable path hash so a repo gives the same sample every visit, are dated with
     `git blame --porcelain -w HEAD` (4 at a time, 20 s per file; results are sorted
@@ -82,14 +94,14 @@ needs Node 22+ and Vite 8 needs `^20.19 || >=22.12`. Only Node 24.18 has been ru
     after 60 s; `sample.complete` is false when not every eligible file was tried.
     Measured 2026-10-15: ky 4 s, express 32 s (all 211 files), vite 78 s (400 of
     2,715 files).
-- **The domain logic** is `parseHistory` (`server/src/history.js`): it walks
+- **The domain logic** is `parseHistory` (`server/src/history.ts`): it walks
   `git log --topo-order --reverse -M --raw --numstat` and tracks each file's life.
   A/C is a birth, M/T a touch, R moves the life to a new path, D buries it.
   A deletion of a path that is already buried (the same delete on a parallel
   branch) is ignored on purpose. `lifeNumber` counts re-creations at the same path.
   Checked on 2026-10-15 against expressjs/express: plain git shows 568 deletions,
   and the app returns 566 graves (the 2 difference is parallel-branch duplicates).
-- **Fossils domain logic** is in `server/src/blame.js` (pure, unit-tested): which files
+- **Fossils domain logic** is in `server/src/blame.ts` (pure, unit-tested): which files
   to date, parsing `git blame --porcelain` (commit details appear only on a commit's
   first line), and which lines are fossils (code files first, at least 4 letters or
   digits, one per file, duplicate texts dropped). Line age is the blame **author**
@@ -128,7 +140,8 @@ env var, file) and re-read any passage that mentions them.
 | Tests: added, removed, or what they cover | "Testing" here (the coverage list and the "not covered" line) |
 | The CI workflow or branch protection | "CI" and "Git" here |
 | The server pipeline: clone, log, limits, timeouts, caching | "Pipeline" here; README "How it works" |
-| An HTTP route or the response shape | "The only HTTP routes" here; `web/src/types.ts` |
+| An HTTP route or the response shape | "The only HTTP routes" here; `server/src/api-types.ts` (the frontend picks it up; fix what `npm run typecheck` then flags) |
+| A tsconfig, the TypeScript version, or how TypeScript runs | "TypeScript without a build step" and "Commands" here; README "Run it" if the Node version changes |
 | Which links are accepted or rejected | "Link handling" here; KNOWN_ISSUES.md if it touches the private-IP gap |
 | How history is parsed (births, renames, deaths) | "The domain logic" here; README "How it works" |
 | What a visitor sees or can do on the page | README opening paragraph |
@@ -150,6 +163,13 @@ Confirmed by Paresh on 2026-10-15. Don't undo these without asking.
   later. Don't add a cache (memory, files or database) without asking. (Sharing one
   dig between requests that arrive at the same moment is not a cache and stays.)
 - **No direct commits to `main`.** See "Git".
+- **TypeScript in strict mode, run directly by Node, with no build step** (Paresh,
+  2026-10-15). Chosen over compiling to `dist/` so dev, tests and deploy all run the
+  same files with nothing to rebuild; the cost is the erasable-syntax limits under
+  "TypeScript without a build step". Don't add a compile step, `any`-typed escape
+  hatches or looser compiler settings without asking.
+- **The server owns the API types** (Paresh, 2026-10-15): `server/src/api-types.ts` is
+  the only definition, and the frontend imports it, so the two sides can't drift.
 
 ## Testing
 
@@ -160,38 +180,40 @@ an exhibit shows are derived; and the data logic of any new exhibit. A bug fix i
 that logic adds a test that fails without the fix. Changes that only touch styling,
 layout or wording don't need tests. A PR that changes logic without tests isn't
 ready to merge. To keep logic testable, put it in pure functions the tests can
-import (like `server/src/blame.js`), and have tests import app code, never copy it.
+import (like `server/src/blame.ts`), and have tests import app code, never copy it.
 
 `npm test` uses Node's built-in `node:test` in both workspaces; there are no test
-dependencies. The web tests are TypeScript run directly by Node 24's type stripping,
-so they import with explicit `.ts` extensions, and only modules whose own imports are
-type-only (or carry `.ts` extensions) can be loaded. They sit in `web/test/`,
-outside `tsconfig.json`'s `include`, so `tsc` doesn't check them. On 2026-10-15:
-**73 tests, all passing** (54 server, 19 web).
+dependencies. All tests are TypeScript that Node runs directly, and `npm run typecheck`
+checks them under the same strict settings as the code they test. They import with
+explicit `.ts` extensions. A web test can only load modules whose own imports are
+type-only or carry `.ts` extensions, because Node, unlike Vite, won't guess the
+extension. The web tests have their own `web/test/tsconfig.json`, which swaps the
+browser's Vite types for Node's. On 2026-10-15: **73 tests, all passing** (54 server,
+19 web).
 
 Server (`server/test/`):
 
-- `url.test.js`: `normalizeRepoUrl` (accepted link forms, per-host trimming and
+- `url.test.ts`: `normalizeRepoUrl` (accepted link forms, per-host trimming and
   commit links, rejected schemes, credentials, ports, local and private-network
   hosts) and `fileUrl` (each host's format, path encoding).
-- `history.test.js`: `parseHistory` and `unquotePath`, on hand-written log text and
+- `history.test.ts`: `parseHistory` and `unquotePath`, on hand-written log text and
   on real repos (renames, re-creation, binary files, unusual paths, the same
   deletion on two branches). On Windows the unusual-path case drops the `"` (not
   allowed in Windows file names); CI on Linux runs the full case.
-- `graveyard.test.js` / `fossils.test.js`: `buildGraveyard` and `buildFossils` end to
+- `graveyard.test.ts` / `fossils.test.ts`: `buildGraveyard` and `buildFossils` end to
   end on real repos (output shape, newest-first graves and the grave limit,
   sampling, the file limit and time budget, skipped files), plus the pure
   `pickSample`, `pickFossils` and `Strata`, including order independence.
-- `git.test.js`: the `git()` wrapper: stdout, non-zero exit, timeout, output cap,
+- `git.test.ts`: the `git()` wrapper: stdout, non-zero exit, timeout, output cap,
   a missing git binary (run in a child process), and that every transport except
   https is refused, so a pasted link can't reach local files.
-- `dig.test.js`: `toUserError` (which git failures become 404/502/422 and which stay
+- `dig.test.ts`: `toUserError` (which git failures become 404/502/422 and which stay
   500s), `withDigSlot` (at most 2 clones at once, slots freed on failure) and
   `headFromLsRemote`.
-- `app.test.js`: the HTTP routes with fake exhibits: health, routing, 400 for bad
+- `app.test.ts`: the HTTP routes with fake exhibits: health, routing, 400 for bad
   links, `UserError` status, and a generic 500 that leaks no details.
-- `blame.test.js`: the pure fossil helpers in `server/src/blame.js`.
-- `helpers/git-repo.js`: builds throwaway repos with fixed authors and dates in the
+- `blame.test.ts`: the pure fossil helpers in `server/src/blame.ts`.
+- `helpers/git-repo.ts`: builds throwaway repos with fixed authors and dates in the
   OS temp dir, deleted after each test file. Use it for any test that needs a repo.
 
 Web (`web/test/`): `strata.test.ts` (banding, grain choice, half-life and share
@@ -199,7 +221,7 @@ stats, age colours) and `lore.test.ts` (epitaph rules in priority order, lifespa
 plural, percent and date wording).
 
 Coverage (`npm run coverage`, 2026-10-15): server 94.5% of lines; every file at
-100% except `dig.js` 70%, `graveyard.js` 88% and `fossils.js` 97%. Web: `lore.ts`
+100% except `dig.ts` 66%, `graveyard.ts` 89% and `fossils.ts` 97%. Web: `lore.ts`
 and `strata.ts` 100%. Node only reports files the tests import, so those web
 numbers don't include the components.
 
@@ -208,9 +230,9 @@ check, dropping `formerNames` on rename, allowing `169.254.x.x`, or removing the
 order-independence sort in `Strata` each made a test fail.
 
 **Not covered:** the network half of the pipeline: `dig()`, `remoteHead` and the
-clone (`dig.js`), and the `getGraveyard`/`getFossils` wrappers. `git()` allows only
+clone (`dig.ts`), and the `getGraveyard`/`getFossils` wrappers. `git()` allows only
 https, so tests can't clone a local repo. Also the "skip a file whose blame fails"
-path in `fossils.js`, all React components, `exhibits.ts` (its import of `./lore`
+path in `fossils.ts`, all React components, `exhibits.ts` (its import of `./lore`
 has no `.ts` extension, so Node can't load it), and `motion.ts`. The hostname-only
 private-network gap (KNOWN_ISSUES.md) is not tested because it isn't fixed.
 
@@ -225,7 +247,7 @@ destructive: the server writes only to OS temp folders, which it deletes.
 ## CI
 
 `.github/workflows/ci.yml` runs one job, `checks` (Ubuntu, Node 24): `npm ci`, then
-`npm run build`, then `npm test`. It runs on every pull request, whatever the base
+`npm run typecheck`, `npm run build` and `npm test`. It runs on every pull request, whatever the base
 branch (so stacked PRs are checked too), and on every push to `main`. `checks` is the
 required status check for merging into `main` (see "Git"). There is no deploy job.
 

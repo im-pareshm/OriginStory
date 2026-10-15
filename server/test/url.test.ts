@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { fileUrl, normalizeRepoUrl, UserError } from '../src/url.js';
+import { fileUrl, normalizeRepoUrl, UserError } from '../src/url.ts';
 
-const rejects = (input) =>
+const rejects = (input: unknown) =>
   assert.throws(
     () => normalizeRepoUrl(input),
     (err) => err instanceof UserError && err.status === 400,

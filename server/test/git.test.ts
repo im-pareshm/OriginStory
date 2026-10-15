@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { test } from 'node:test';
-import { git, GitError } from '../src/git.js';
-import { createRepo, lines, scratchDir } from './helpers/git-repo.js';
+import { git, GitError } from '../src/git.ts';
+import { createRepo, lines, scratchDir } from './helpers/git-repo.ts';
 
 test('git resolves with stdout', async () => {
   assert.match(await git(['--version']), /^git version \d/);
@@ -62,7 +62,7 @@ test('git reports a missing git binary as "Could not run git", which is a server
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toUpperCase() !== 'PATH'));
   env.PATH = scratchDir();
   const script = `
-    const { git, GitError } = await import(${JSON.stringify(new URL('../src/git.js', import.meta.url).href)});
+    const { git, GitError } = await import(${JSON.stringify(new URL('../src/git.ts', import.meta.url).href)});
     try { await git(['--version']); console.log('resolved'); }
     catch (err) { console.log(JSON.stringify({ isGitError: err instanceof GitError, message: err.message })); }`;
   const output = execFileSync(process.execPath, ['--input-type=module', '-e', script], { env, encoding: 'utf8' });

@@ -1,14 +1,14 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { git } from '../src/git.js';
-import { LOG_ARGS, parseHistory, unquotePath } from '../src/history.js';
-import { createRepo, DAY, lines, START } from './helpers/git-repo.js';
+import { git } from '../src/git.ts';
+import { LOG_ARGS, parseHistory, unquotePath } from '../src/history.ts';
+import { createRepo, DAY, lines, START, type TestRepo } from './helpers/git-repo.ts';
 
 // ---------------------------------------------------------------------------
 // Pure parsing, on hand-written `git log` output.
 // ---------------------------------------------------------------------------
 
-const commitHeader = (hash, author, seconds, subject) => `\x1e${hash}\x1f${author}\x1f${seconds}\x1f${subject}\n\n`;
+const commitHeader = (hash: string, author: string, seconds: number, subject: string) => `\x1e${hash}\x1f${author}\x1f${seconds}\x1f${subject}\n\n`;
 
 test('unquotePath decodes the C-style quoting git uses for unusual paths', () => {
   assert.equal(unquotePath('plain/path.js'), 'plain/path.js');
@@ -35,6 +35,7 @@ test('parseHistory buries a file whose birth it never saw, with an unknown birth
     `:100644 000000 ${'1'.repeat(40)} ${'0'.repeat(40)} D\tghost.txt\n` +
     '0\t5\tghost.txt\n';
   const [grave] = parseHistory(text).graves;
+  assert.ok(grave);
   assert.equal(grave.path, 'ghost.txt');
   assert.equal(grave.born, null);
   assert.equal(grave.lastWords, null);
@@ -47,7 +48,7 @@ test('parseHistory buries a file whose birth it never saw, with an unknown birth
 // End to end: real throwaway repos, read with the same `git log` the server runs.
 // ---------------------------------------------------------------------------
 
-const historyOf = async (repo) => parseHistory(await git(LOG_ARGS, { cwd: repo.dir }));
+const historyOf = async (repo: TestRepo) => parseHistory(await git(LOG_ARGS, { cwd: repo.dir }));
 // Windows forbids quotes in file names; elsewhere a quote forces git to C-quote the path.
 const ODD_PATH = process.platform === 'win32' ? 'dir with space/ünï.txt' : 'dir with space/ünï "q".txt';
 
@@ -86,30 +87,33 @@ test('parseHistory follows files through birth, edits, renames, deletion and reb
   assert.equal(history.lastCommitAt, (START + 5 * DAY) * 1000);
   assert.equal(history.graves.length, 5);
 
-  const graveOf = (path, lifeNumber = 1) => history.graves.find((g) => g.path === path && g.lifeNumber === lifeNumber);
+  const graveOf = (path: string, lifeNumber = 1) => history.graves.find((g) => g.path === path && g.lifeNumber === lifeNumber);
 
   const renamed = graveOf('c.txt');
+  assert.ok(renamed);
   assert.deepEqual(renamed.formerNames, ['b.txt'], 'a rename carries the life over, not a death and a birth');
-  assert.equal(renamed.born.message, 'add the first files');
-  assert.equal(renamed.lastWords.message, 'rename b to c');
+  assert.equal(renamed.born?.message, 'add the first files');
+  assert.equal(renamed.lastWords?.message, 'rename b to c');
   assert.equal(renamed.died.message, 'clear out old files');
   assert.equal(renamed.lines, 2);
   assert.equal(renamed.touches, 2);
   assert.deepEqual(renamed.authors.sort(), ['Ada', 'Grace']);
 
   const firstLife = graveOf('a.txt', 1);
-  assert.equal(firstLife.born.at, START * 1000);
-  assert.equal(firstLife.lastWords.message, 'grow a');
+  assert.ok(firstLife);
+  assert.equal(firstLife.born?.at, START * 1000);
+  assert.equal(firstLife.lastWords?.message, 'grow a');
   assert.equal(firstLife.died.at, (START + 3 * DAY) * 1000);
   assert.equal(firstLife.lines, 4, 'lines at death come from the deleting commit');
 
   const secondLife = graveOf('a.txt', 2);
   assert.ok(secondLife, 'a file re-created at the same path starts life number 2');
-  assert.equal(secondLife.born.message, 'bring a back');
+  assert.equal(secondLife.born?.message, 'bring a back');
   assert.equal(secondLife.died.author, 'Linus');
   assert.equal(secondLife.lines, 1);
 
   const binary = graveOf('logo.bin');
+  assert.ok(binary);
   assert.equal(binary.binary, true);
   assert.equal(binary.lines, null);
 
