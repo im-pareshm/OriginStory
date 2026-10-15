@@ -14,56 +14,71 @@ const MAX_FOSSIL_TEXT = 160;
 
 /** Dates every surviving line in a sample of the repo's files with `git blame`. */
 export function getFossils(repo) {
-  return dig(repo, 'fossils', async (gitDir) => {
-    const [tree, basics] = await Promise.all([
-      git(['ls-tree', '-r', '-l', '-z', 'HEAD'], { cwd: gitDir }),
-      repoBasics(repo, gitDir),
-    ]);
-    const tracked = parseTree(tree);
-    const eligible = tracked.filter(isFossilCandidate);
-    const sample = eligible
-      .map((entry) => entry.path)
-      .sort((a, b) => hashString(a) - hashString(b) || a.localeCompare(b))
-      .slice(0, MAX_FILES);
+  return dig(repo, 'fossils', (gitDir) => buildFossils(repo, gitDir));
+}
 
-    const strata = new Strata();
-    const attempted = await blameEach(gitDir, sample, Date.now() + BUDGET_MS, (path, blame) => strata.add(path, blame));
+/**
+ * The fossils exhibit for the clone at `gitDir`. Separate from `getFossils` so tests can
+ * run it on a local repo; the options exist only so tests can shrink the limits.
+ */
+export async function buildFossils(repo, gitDir, { maxFiles = MAX_FILES, budgetMs = BUDGET_MS } = {}) {
+  const [tree, basics] = await Promise.all([
+    git(['ls-tree', '-r', '-l', '-z', 'HEAD'], { cwd: gitDir }),
+    repoBasics(repo, gitDir),
+  ]);
+  const tracked = parseTree(tree);
+  const eligible = tracked.filter(isFossilCandidate);
+  const sample = pickSample(
+    eligible.map((entry) => entry.path),
+    maxFiles,
+  );
 
-    const cores = strata.cores.map(({ oldest, ...core }) => ({
-      ...core,
-      oldest: oldest && {
-        path: core.path,
-        line: oldest.line,
-        text: oldest.text.trim().slice(0, MAX_FOSSIL_TEXT),
-        commit: oldest.commit,
-        url: fileUrl(repo, basics.head, core.path, oldest.line),
-      },
-    }));
-    // Code first; config and docs only fill in when a repo has too little code to fill the case.
-    // A line that survives in many files (a license header, "Module dependencies.") shows once.
-    const seen = new Set();
-    const fossils = cores
-      .map((core) => core.oldest)
-      .filter(Boolean)
-      .sort((a, b) => isCodeFile(b.path) - isCodeFile(a.path) || a.commit.at - b.commit.at || a.path.localeCompare(b.path))
-      .filter((fossil) => !seen.has(fossil.text) && seen.add(fossil.text))
-      .slice(0, MAX_FOSSILS);
+  const strata = new Strata();
+  const attempted = await blameEach(gitDir, sample, Date.now() + budgetMs, (path, blame) => strata.add(path, blame));
 
-    return {
-      repo: basics,
-      layers: strata.layers(),
-      cores,
-      fossils,
-      sample: {
-        blamed: cores.length,
-        eligible: eligible.length,
-        tracked: tracked.length,
-        // Every eligible file was tried (some may still have turned out to be binary).
-        complete: sample.length === eligible.length && attempted === sample.length,
-      },
-      generatedAt: Date.now(),
-    };
-  });
+  const cores = strata.cores.map(({ oldest, ...core }) => ({
+    ...core,
+    oldest: oldest && {
+      path: core.path,
+      line: oldest.line,
+      text: oldest.text.trim().slice(0, MAX_FOSSIL_TEXT),
+      commit: oldest.commit,
+      url: fileUrl(repo, basics.head, core.path, oldest.line),
+    },
+  }));
+
+  return {
+    repo: basics,
+    layers: strata.layers(),
+    cores,
+    fossils: pickFossils(cores.map((core) => core.oldest).filter(Boolean)),
+    sample: {
+      blamed: cores.length,
+      eligible: eligible.length,
+      tracked: tracked.length,
+      // Every eligible file was tried (some may still have turned out to be binary).
+      complete: sample.length === eligible.length && attempted === sample.length,
+    },
+    generatedAt: Date.now(),
+  };
+}
+
+/** Up to `max` paths, chosen by path hash so the same repo always gives the same sample. */
+export function pickSample(paths, max = MAX_FILES) {
+  return [...paths].sort((a, b) => hashString(a) - hashString(b) || a.localeCompare(b)).slice(0, max);
+}
+
+/**
+ * The fossils worth showing: code first (config and docs only fill in when a repo has too
+ * little code), then oldest first. A line that survives in many files (a license header,
+ * "Module dependencies.") shows once.
+ */
+export function pickFossils(candidates, max = MAX_FOSSILS) {
+  const seen = new Set();
+  return [...candidates]
+    .sort((a, b) => isCodeFile(b.path) - isCodeFile(a.path) || a.commit.at - b.commit.at || a.path.localeCompare(b.path))
+    .filter((fossil) => !seen.has(fossil.text) && seen.add(fossil.text))
+    .slice(0, max);
 }
 
 /**
@@ -96,7 +111,7 @@ const monthOf = (at) => {
 };
 
 /** Accumulates blamed files into monthly layers and per-file cores as they arrive. */
-class Strata {
+export class Strata {
   months = new Map(); // 'YYYY-MM' -> { lines, authors: Map<name, lines> }
   cores = [];
 

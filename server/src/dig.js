@@ -48,9 +48,14 @@ async function remoteHead(repo, emptyMessage = "That repository is empty. There'
   } catch (err) {
     throw toUserError(err);
   }
-  const hash = output.split('\n').find((line) => line.endsWith('\tHEAD'))?.split('\t')[0];
+  const hash = headFromLsRemote(output);
   if (!hash) throw new UserError(emptyMessage, 404);
   return hash;
+}
+
+/** The commit hash `git ls-remote <url> HEAD` reports for HEAD, or null for an empty repo. */
+export function headFromLsRemote(output) {
+  return output.split('\n').find((line) => line.endsWith('\tHEAD'))?.split('\t')[0] ?? null;
 }
 
 async function excavate(repo, work) {
@@ -67,7 +72,8 @@ async function excavate(repo, work) {
   }
 }
 
-function toUserError(err) {
+/** Turns git failures into messages a visitor can act on; anything else passes through as a 500. */
+export function toUserError(err) {
   if (err instanceof UserError) return err;
   if (err instanceof GitError) {
     if (err.timedOut) {
@@ -89,7 +95,7 @@ let activeDigs = 0;
 const waiting = [];
 
 /** Caps how many repos are cloned at once so a burst of visitors can't exhaust the machine. */
-function withDigSlot(task) {
+export function withDigSlot(task) {
   return new Promise((resolve, reject) => {
     const run = () => {
       activeDigs++;
