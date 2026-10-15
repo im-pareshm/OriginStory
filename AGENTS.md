@@ -18,8 +18,10 @@ exhibits come one at a time.
 
 ## Status (as of 2026-10-15)
 
-Exhibits I and II work end to end locally. The only automated tests are server unit
-tests for the blame helpers (see "Testing"). There is no CI and no git remote yet. Parked problems: see [KNOWN_ISSUES.md](KNOWN_ISSUES.md).
+Exhibits I and II work end to end locally. The server's parsing and link logic has
+unit tests, which CI runs on every pull request; the frontend has none (see
+"Testing"). The repo is public on GitHub; nothing is deployed. Parked problems: see
+[KNOWN_ISSUES.md](KNOWN_ISSUES.md).
 
 ## Commands
 
@@ -31,9 +33,10 @@ All run on 2026-10-15 with Node 24.18, npm 11.16, git 2.55 on Windows 11.
 - `npm run dev`: API on http://localhost:3001 (`node --watch`) plus Vite on
   http://localhost:5173, which proxies `/api` to the API. Open the Vite URL.
 - `npm run build`: `tsc --noEmit` plus `vite build` for `web/` only. **Use this as
-  the check**, together with `npm test -w server`. The server is plain JavaScript
-  with no typecheck or lint.
-- `npm test -w server`: `node --test`, the server unit tests in `server/test/`.
+  the check**, together with `npm test`; CI runs exactly these two. The server is
+  plain JavaScript with no typecheck or lint.
+- `npm test`: runs `npm test -w server`, which is `node --test` over
+  `server/test/*.test.js`. Needs `git` on the PATH (see "Testing").
 - `npm run typecheck`: `tsc --noEmit` for `web/` only.
 - `npm start -w server`: the API alone, without watch mode.
 
@@ -116,7 +119,9 @@ env var, file) and re-read any passage that mentions them.
 
 | If you change… | Update |
 |---|---|
-| npm scripts, Node version, workspaces, file layout | "Commands" and "Key implementation facts" here; README "Run it" |
+| npm scripts, Node version, workspaces, file layout | "Commands" and "Key implementation facts" here; README "Run it"; `.github/workflows/ci.yml` if the check commands or Node version change |
+| Tests: added, removed, or what they cover | "Testing" here (the coverage list and the "not covered" line) |
+| The CI workflow or branch protection | "CI" and "Git" here |
 | The server pipeline: clone, log, limits, timeouts, caching | "Pipeline" here; README "How it works" |
 | An HTTP route or the response shape | "The only HTTP routes" here; `web/src/types.ts` |
 | Which links are accepted or rejected | "Link handling" here; KNOWN_ISSUES.md if it touches the private-IP gap |
@@ -143,10 +148,39 @@ Confirmed by Paresh on 2026-10-15. Don't undo these without asking.
 
 ## Testing
 
-`npm test -w server` runs `server/test/*.test.js` with `node:test` (no
-dependencies). Only `server/src/blame.js` is covered: there are no tests for
-`parseHistory`, `normalizeRepoUrl`, `fossils.js` or the frontend. `npm run build`
-is the web typecheck.
+**Rule (proposed and approved by Paresh, 2026-10-15): logic changes come with tests
+in the same pull request.** "Logic" means: how git output (log, blame, ls-tree) is
+parsed; which links, files or lines are accepted, picked or built; how the numbers
+an exhibit shows are derived; and the data logic of any new exhibit. A bug fix in
+that logic adds a test that fails without the fix. Changes that only touch styling,
+layout or wording don't need tests. A PR that changes logic without tests isn't
+ready to merge. To keep logic testable, put it in pure functions the tests can
+import (like `server/src/blame.js`), and have tests import app code, never copy it.
+
+`npm test` runs `server/test/*.test.js` with `node:test` (no dependencies): 23 tests
+on 2026-10-15, all passing.
+
+- `url.test.js`: `normalizeRepoUrl` (accepted link forms, per-host trimming and
+  commit links, rejected schemes, credentials, ports, local and private-network
+  hosts) and `fileUrl` (each host's format, path encoding).
+- `history.test.js`: `parseHistory` and `unquotePath` on hand-written log text,
+  plus end-to-end runs that build small git repos in the OS temp dir and read them
+  with the server's own `LOG_ARGS` through `git()`. They cover renames, deletion,
+  re-creation (`lifeNumber`), binary files, unusual paths, and the same deletion on
+  two branches. They need `git` on the PATH, write only to a temp folder they
+  delete, and take under a second. On Windows the unusual-path case drops the `"`
+  (not allowed in Windows file names); CI on Linux runs the full case.
+- `blame.test.js`: the pure fossil helpers in `server/src/blame.js`.
+
+Checked on 2026-10-15 that the tests catch real bugs: removing the parallel-branch
+check, dropping `formerNames` on rename, or allowing `169.254.x.x` each made a test
+fail.
+
+**Not covered:** the orchestration in `graveyard.js`, `fossils.js` and `dig.js`
+(cloning, sampling, time budgets), the `git()` wrapper, the HTTP routes, and all of
+`web/` (`lore.ts`, `strata.ts`, components). There is no frontend test runner yet;
+adding one is the first step before testing `web/` logic. The hostname-only
+private-network gap (KNOWN_ISSUES.md) is not tested because it isn't fixed.
 
 How changes have been checked by hand: run `npm run dev`, then call the API through
 the proxy and compare against plain git, for example
@@ -158,20 +192,26 @@ destructive: the server writes only to OS temp folders, which it deletes.
 
 ## CI
 
-None. Whether to add any is not decided.
+`.github/workflows/ci.yml` runs one job, `checks` (Ubuntu, Node 24): `npm ci`, then
+`npm run build`, then `npm test`. It runs on every pull request, whatever the base
+branch (so stacked PRs are checked too), and on every push to `main`. `checks` is the
+required status check for merging into `main` (see "Git"). There is no deploy job.
 
 ## Git
 
-Facts as of 2026-10-15: default branch `main`, no remote yet. The first commit was
-made directly on `main` at Paresh's request; everything after it goes through
-branches.
+Facts as of 2026-10-15: default branch `main`; remote `origin` is
+https://github.com/im-pareshm/OriginStory (public). The first commit was made directly
+on `main` at Paresh's request; everything after it goes through pull requests, which
+are merged on GitHub with a merge commit (PR #1).
 
 - **Rule (Paresh, 2026-10-15): never commit directly to `main`.** Work on a branch
   and merge into `main` through a pull request. Enforced locally by
   `.githooks/pre-commit` (rejects commits while on `main`) and `.githooks/pre-push`
   (rejects pushes to `main`), which `npm install` activates. Both were tested on
-  2026-10-15. Hooks can be skipped with `--no-verify`, so host-side branch protection
-  is the real guard. Unknown: not set up yet (no remote).
+  2026-10-15. Hooks can be skipped with `--no-verify`, so GitHub branch protection on
+  `main` is the real guard: a pull request is required, the `checks` CI job must
+  pass, and force-pushes and deletion are blocked. It applies to admins too, and no
+  approving review is required (solo project).
 - **Commit messages (Paresh, 2026-10-15):** subject `<type>(<scope>): <short
   description>`, scope required, for example `fix(graveyard): keep renamed files'
   birth date`. Allowed types: `feat` new functionality · `fix` bug fix · `refactor`

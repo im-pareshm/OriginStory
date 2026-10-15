@@ -17,7 +17,7 @@ npm run dev
 
 Open http://localhost:5173. The API runs on http://localhost:3001; Vite proxies `/api` to it.
 
-Checks: `npm run build` (web typecheck and build) and `npm test -w server` (server unit tests).
+Checks: `npm run build` (web typecheck and build) and `npm test` (server unit tests). CI runs both on every pull request.
 
 ## How it works
 
