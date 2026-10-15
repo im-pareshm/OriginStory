@@ -36,7 +36,7 @@ export async function buildFossils(repo, gitDir, { maxFiles = MAX_FILES, budgetM
   const strata = new Strata();
   const attempted = await blameEach(gitDir, sample, Date.now() + budgetMs, (path, blame) => strata.add(path, blame));
 
-  const cores = strata.cores.map(({ oldest, ...core }) => ({
+  const cores = strata.orderedCores().map(({ oldest, ...core }) => ({
     ...core,
     oldest: oldest && {
       path: core.path,
@@ -136,13 +136,19 @@ export class Strata {
     this.cores.push({ path, lines: lines.length, runs, oldest });
   }
 
+  /** Cores by path. Blames finish in any order; sorting keeps every visit's answer the same. */
+  orderedCores() {
+    return [...this.cores].sort((a, b) => a.path.localeCompare(b.path));
+  }
+
   layers() {
     return [...this.months]
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([month, { lines, authors }]) => ({
         month,
         lines,
-        authors: [...authors].sort((a, b) => b[1] - a[1]).slice(0, 5),
+        // Ties go by name, not by which file happened to be blamed first.
+        authors: [...authors].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 5),
       }));
   }
 }
