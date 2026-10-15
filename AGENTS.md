@@ -155,7 +155,18 @@ branches.
   that don't match, except git's own `Merge …` subjects.
 - **Pull requests:** fill in `.github/pull_request_template.md` (summary, changes,
   type, testing, impact, risk, breaking changes, pre-merge checklist).
-- **Branch names:** no convention given. Unknown: ask before relying on one.
+- **Branch names (Paresh, 2026-10-15):** `<type>/<TICKET-123->?<short-description>`,
+  or `release/<major>.<minor>.<patch>`. Types: `feature` new functionality ·
+  `bugfix` ordinary defects · `hotfix` only for urgent fixes that need an expedited
+  production release · `refactor` · `perf` · `test` · `docs` · `chore` maintenance
+  or configuration. Rules: lowercase, words joined by hyphens; include the Jira key
+  when there is one (the only uppercase part, e.g. `feature/ATLAS-123-bulk-allocation-save`);
+  short, specific, action-oriented; exactly one `/`; no personal names, dates, vague
+  words (`changes`, `misc`, `wip`, `temp`) or temporary names (`test-branch`); never
+  the target branch name. `.githooks/check-branch-name` enforces all of these except
+  personal names, with a 40-character cap on the description. It runs on every commit
+  (`pre-commit`) and push (`pre-push`). Check a name by hand with
+  `sh .githooks/check-branch-name <name>`.
 - **Commit author email:** the GitHub noreply address
   (`78204885+im-pareshm@users.noreply.github.com`), set in this repo's local git
   config, not the personal email (Paresh, 2026-10-15).

@@ -1,10 +1,15 @@
 #!/bin/sh
-# Blocks commits made directly on main: all work goes through a branch and a pull request.
+# Blocks commits made directly on main (all work goes through a branch and a pull
+# request) and commits on branches whose names break the rules in check-branch-name.
 # Installed by `npm install` (scripts/install-hooks.mjs sets core.hooksPath=.githooks).
 
 branch="$(git symbolic-ref --short HEAD 2>/dev/null)"
 if [ "$branch" = "main" ]; then
   echo "pre-commit: direct commits to main are not allowed." >&2
-  echo "Create a branch first, e.g.  git switch -c feature/<short-name>" >&2
+  echo "Create a branch first, e.g.  git switch -c feature/<short-description>" >&2
   exit 1
 fi
+
+# Detached HEAD (rebase, bisect) has no branch name to check.
+[ -n "$branch" ] || exit 0
+sh "$(dirname "$0")/check-branch-name" "$branch" || { echo "pre-commit: rename the branch before committing." >&2; exit 1; }
