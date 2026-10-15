@@ -1,0 +1,19 @@
+#!/bin/sh
+# Enforces the commit subject format: <type>(<scope>): <short description>
+# Allowed types and the full template are in .gitmessage; AGENTS.md "Git" has the rules.
+# Installed by `npm install` (scripts/install-hooks.mjs sets core.hooksPath=.githooks).
+
+subject="$(grep -v '^#' "$1" | grep -v '^[[:space:]]*$' | head -n 1)"
+
+# Merge commits created by git keep their default subject.
+case "$subject" in
+  "Merge "*) exit 0 ;;
+esac
+
+if ! printf '%s\n' "$subject" | grep -Eq '^(feat|fix|refactor|perf|test|docs|style|build|ci|chore|revert)\([a-z0-9._/-]+\)!?: .+'; then
+  echo "commit-msg: subject must look like  <type>(<scope>): <short description>" >&2
+  echo "  allowed types: feat fix refactor perf test docs style build ci chore revert" >&2
+  echo "  example:       feat(graveyard): add search by file path" >&2
+  echo "  got:           $subject" >&2
+  exit 1
+fi

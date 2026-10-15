@@ -1,0 +1,2 @@
+# Hooks run under sh, which breaks on CRLF line endings; keep them LF on every OS.
+.githooks/* text eol=lf

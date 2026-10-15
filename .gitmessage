@@ -1,0 +1,18 @@
+<type>(<scope>): <short description>
+
+# Why is this change needed?
+# Explain the problem, requirement, or motivation.
+
+# What has changed?
+# - Describe the key implementation changes.
+# - Mention relevant API, UI, database, or configuration changes.
+
+# How was it tested?
+# - Unit tests, integration tests, or manual verification.
+# - Include important scenarios tested.
+
+# Breaking changes (if any):
+# Describe incompatible changes and migration requirements.
+
+# Allowed types: feat fix refactor perf test docs style build ci chore revert
+# Lines starting with # are removed from the message.
