@@ -23,13 +23,17 @@ export interface Grave {
   lifeNumber: number;
 }
 
-export interface RepoInfo {
+/** What every exhibit reports about the repo it was built from. */
+export interface RepoBasics {
   name: string;
   url: string;
   host: string;
   branch: string | null;
   head: string;
   commitUrlBase: string | null;
+}
+
+export interface RepoInfo extends RepoBasics {
   commitCount: number;
   contributorCount: number;
   aliveFileCount: number;
@@ -42,5 +46,51 @@ export interface GraveyardData {
   graves: Grave[];
   totalGraves: number;
   truncated: boolean;
+  generatedAt: number;
+}
+
+/** Surviving lines written in one calendar month (UTC), by their blame author time. */
+export interface Layer {
+  /** "YYYY-MM". */
+  month: string;
+  lines: number;
+  /** Top 5 authors of this month's surviving lines, most first. */
+  authors: [name: string, lines: number][];
+}
+
+/** The oldest meaningful line still alive in a file. */
+export interface Fossil {
+  path: string;
+  line: number;
+  text: string;
+  commit: CommitEvent;
+  /** Link to this line at HEAD, or null for hosts without a known link format. */
+  url: string | null;
+}
+
+/** One file's lines, top to bottom, as runs of [year written, line count]. */
+export interface Core {
+  path: string;
+  lines: number;
+  runs: [year: number, count: number][];
+  oldest: Fossil | null;
+}
+
+export interface FossilsData {
+  repo: RepoBasics;
+  /** Ascending by month. */
+  layers: Layer[];
+  cores: Core[];
+  /** The oldest lines in the sample, at most one per file, code files first. */
+  fossils: Fossil[];
+  sample: {
+    /** Files dated with git blame. */
+    blamed: number;
+    /** Text files worth dating (not lockfiles, vendored, minified or binary). */
+    eligible: number;
+    tracked: number;
+    /** Every eligible file was attempted, so the numbers aren't a sample. */
+    complete: boolean;
+  };
   generatedAt: number;
 }

@@ -1,16 +1,15 @@
 import { useEffect, useState } from 'react';
-import { LOADING_LINES } from '../lore';
 
-export function Loading({ repo }: { repo: string }) {
+export function Loading({ repo, lines }: { repo: string; lines: string[] }) {
   const [seconds, setSeconds] = useState(0);
 
   useEffect(() => {
     setSeconds(0);
     const timer = window.setInterval(() => setSeconds((s) => s + 1), 1000);
     return () => window.clearInterval(timer);
-  }, [repo]);
+  }, [repo, lines]);
 
-  const line = LOADING_LINES[Math.min(Math.floor(seconds / 3), LOADING_LINES.length - 1)];
+  const line = lines[Math.min(Math.floor(seconds / 3), lines.length - 1)];
 
   return (
     <div className="loading" role="status" aria-live="polite">

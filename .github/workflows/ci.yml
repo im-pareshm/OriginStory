@@ -1,0 +1,34 @@
+# One fast job, run on every pull request (any base, so stacked PRs are checked too)
+# and on every push to main: install, web typecheck + build, server and web tests.
+# The tests build tiny throwaway git repos in the OS temp dir; nothing touches the
+# network except `npm ci`. This job ("checks") is the required check for main.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24 # the version development runs on; engines allows >=22.12
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck and build (web)
+        run: npm run build
+
+      - name: Tests (server and web)
+        run: npm test

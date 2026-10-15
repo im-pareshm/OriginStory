@@ -17,6 +17,22 @@ const COMMIT_PATHS = {
   'bitbucket.org': '/commits/',
 };
 
+// How each host links to one line of a file at a given commit: [path prefix, line anchor].
+const FILE_PATHS = {
+  'github.com': ['/blob/', '#L'],
+  'codeberg.org': ['/src/commit/', '#L'],
+  'gitlab.com': ['/-/blob/', '#L'],
+  'bitbucket.org': ['/src/', '#lines-'],
+};
+
+/** A link to `line` of `path` as it was at `sha`, or null for hosts we don't know. */
+export function fileUrl(repo, sha, path, line) {
+  const pattern = FILE_PATHS[repo.host];
+  if (!pattern) return null;
+  const encodedPath = path.split('/').map(encodeURIComponent).join('/');
+  return `${repo.webUrl}${pattern[0]}${sha}/${encodedPath}${pattern[1]}${line}`;
+}
+
 /**
  * Turns whatever the visitor pasted ("owner/repo", "github.com/owner/repo",
  * a full https URL, a link to a subfolder) into a canonical https clone URL.
