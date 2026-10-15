@@ -1,0 +1,9 @@
+{
+  // Type-checks the web tests. Node runs them directly, so they import with .ts extensions
+  // and use Node's types instead of the browser's Vite ones.
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "types": ["node"]
+  },
+  "include": ["."]
+}
