@@ -1,0 +1,60 @@
+#!/bin/sh
+# Validates a branch name against the naming rules in AGENTS.md "Git".
+# Usage: sh .githooks/check-branch-name <branch-name>   (exit 0 = valid)
+# Called by pre-commit and pre-push; git never runs this file itself.
+#
+#   <type>/<TICKET-123->?<short-description>    type: feature bugfix hotfix refactor perf test docs chore
+#   release/<major>.<minor>.<patch>
+#
+# The Jira ticket key is the only uppercase part allowed. Descriptions are lowercase
+# words joined by hyphens, one level deep, at most 40 characters.
+
+name="$1"
+
+fail() {
+  echo "branch name '$name' is not allowed: $1" >&2
+  echo "  expected: <type>/<TICKET-123->?<short-description>  or  release/<x.y.z>" >&2
+  echo "  types:    feature bugfix hotfix refactor perf test docs chore" >&2
+  echo "  example:  feature/ATLAS-123-bulk-allocation-save  or  docs/graveyard-readme" >&2
+  echo "  rename:   git branch -m <new-name>" >&2
+  exit 1
+}
+
+case "$name" in
+  main) exit 0 ;;
+  release/*)
+    printf '%s\n' "$name" | grep -Eq '^release/[0-9]+\.[0-9]+\.[0-9]+$' || fail "release branches are release/<major>.<minor>.<patch>"
+    exit 0 ;;
+esac
+
+type="${name%%/*}"
+rest="${name#*/}"
+[ "$type" != "$name" ] || fail "missing a type prefix"
+case "$type" in
+  feature|bugfix|hotfix|refactor|perf|test|docs|chore) ;;
+  *) fail "unknown type '$type'" ;;
+esac
+case "$rest" in
+  */*) fail "no nesting: use exactly one '/'" ;;
+esac
+
+# Split off an optional Jira key (e.g. ATLAS-123-) and check the description separately.
+description="$(printf '%s\n' "$rest" | sed -E 's/^[A-Z][A-Z0-9]+-[0-9]+-//')"
+[ -n "$description" ] || fail "missing a description after the ticket ID"
+printf '%s\n' "$description" | grep -Eq '^[a-z0-9]+(-[a-z0-9]+)*$' ||
+  fail "description must be lowercase words joined by single hyphens (no spaces, underscores or capitals)"
+[ "${#description}" -le 40 ] || fail "description is longer than 40 characters; keep it short"
+
+# Vague or temporary words, dates, and the target branch name.
+for word in $(printf '%s\n' "$description" | tr '-' ' '); do
+  case "$word" in
+    changes|change|stuff|misc|things|temp|tmp|wip|main|master)
+      fail "avoid vague, temporary or target-branch words like '$word'" ;;
+  esac
+done
+case "$description" in
+  test-branch|test|testing|fix|update|updates) fail "too vague; say what the branch does" ;;
+esac
+printf '%s\n' "$description" | grep -Eq '(^|-)[0-9]{4}-[0-9]{2}(-|$)|(^|-)[0-9]{8}(-|$)' && fail "no dates in branch names"
+
+exit 0

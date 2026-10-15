@@ -1,11 +1,19 @@
 #!/bin/sh
-# Blocks pushing to main: main only changes by merging a pull request on the host.
+# Blocks pushing to main (main only changes by merging a pull request on the host) and
+# pushing branches whose names break the rules in check-branch-name.
 # Installed by `npm install` (scripts/install-hooks.mjs sets core.hooksPath=.githooks).
 
+zero="0000000000000000000000000000000000000000"
 while read -r local_ref local_sha remote_ref remote_sha; do
   if [ "$remote_ref" = "refs/heads/main" ]; then
     echo "pre-push: pushing to main is not allowed. Push your branch and open a pull request." >&2
     exit 1
   fi
+  # Deleting a remote branch and pushing tags need no name check.
+  [ "$local_sha" = "$zero" ] && continue
+  case "$remote_ref" in
+    refs/heads/*)
+      sh "$(dirname "$0")/check-branch-name" "${remote_ref#refs/heads/}" || exit 1 ;;
+  esac
 done
 exit 0
