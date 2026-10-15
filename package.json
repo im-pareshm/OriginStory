@@ -12,8 +12,9 @@
     "dev": "concurrently -n api,web -c yellow,cyan \"npm run dev -w server\" \"npm run dev -w web\"",
     "build": "npm run build -w web",
     "typecheck": "npm run typecheck -w web",
-    "test": "npm test -w server",
-    "prepare": "node scripts/install-hooks.mjs"
+    "test": "npm test --workspaces",
+    "prepare": "node scripts/install-hooks.mjs",
+    "coverage": "npm run coverage --workspaces"
   },
   "devDependencies": {
     "concurrently": "^10.0.6"

@@ -1,11 +1,8 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
-import { after, test } from 'node:test';
+import { test } from 'node:test';
 import { git } from '../src/git.js';
 import { LOG_ARGS, parseHistory, unquotePath } from '../src/history.js';
+import { createRepo, DAY, lines, START } from './helpers/git-repo.js';
 
 // ---------------------------------------------------------------------------
 // Pure parsing, on hand-written `git log` output.
@@ -50,53 +47,9 @@ test('parseHistory buries a file whose birth it never saw, with an unknown birth
 // End to end: real throwaway repos, read with the same `git log` the server runs.
 // ---------------------------------------------------------------------------
 
-const scratch = mkdtempSync(join(tmpdir(), 'repo-museum-test-'));
-after(() => rmSync(scratch, { recursive: true, force: true }));
-
-const DAY = 86_400;
-const START = 1_700_000_000; // 2023-11-14, so the timestamps are easy to assert
-
-/** A tiny repo where every commit is one day after the previous one. */
-function createRepo(name, branch = 'trunk') {
-  const dir = join(scratch, name);
-  mkdirSync(dir);
-  let day = 0;
-  const run = (args, env = {}) =>
-    execFileSync('git', ['-c', 'core.autocrlf=false', '-c', 'core.hooksPath=', '-c', 'commit.gpgsign=false', ...args], {
-      cwd: dir,
-      env: { ...process.env, ...env },
-      encoding: 'utf8',
-    });
-  run(['init', '-q', '-b', branch]);
-
-  return {
-    dir,
-    run,
-    write(path, content) {
-      mkdirSync(dirname(join(dir, path)), { recursive: true });
-      writeFileSync(join(dir, path), content);
-    },
-    remove(path) {
-      unlinkSync(join(dir, path));
-    },
-    /** Commits everything as `author`, one day after the previous commit. */
-    commit(author, message) {
-      const when = `@${START + day++ * DAY} +0000`;
-      run(['add', '-A']);
-      run(['commit', '-q', '--allow-empty', '-m', message, `--author=${author} <${author.toLowerCase()}@example.invalid>`], {
-        GIT_AUTHOR_DATE: when,
-        GIT_COMMITTER_DATE: when,
-        GIT_COMMITTER_NAME: author,
-        GIT_COMMITTER_EMAIL: `${author.toLowerCase()}@example.invalid`,
-      });
-    },
-  };
-}
-
 const historyOf = async (repo) => parseHistory(await git(LOG_ARGS, { cwd: repo.dir }));
 // Windows forbids quotes in file names; elsewhere a quote forces git to C-quote the path.
 const ODD_PATH = process.platform === 'win32' ? 'dir with space/ünï.txt' : 'dir with space/ünï "q".txt';
-const lines = (n) => Array.from({ length: n }, (_, i) => `line ${i + 1}`).join('\n') + '\n';
 
 test('parseHistory follows files through birth, edits, renames, deletion and rebirth', async () => {
   const repo = createRepo('lifecycle');
@@ -178,14 +131,7 @@ test('parseHistory buries a file once when two branches both delete it', async (
   repo.write('other.txt', lines(2));
   repo.commit('Ada', 'drop shared on trunk');
 
-  repo.run(['merge', '-q', '--no-ff', '-m', 'merge side', 'side'], {
-    GIT_AUTHOR_DATE: `@${START + 10 * DAY} +0000`,
-    GIT_COMMITTER_DATE: `@${START + 10 * DAY} +0000`,
-    GIT_AUTHOR_NAME: 'Ada',
-    GIT_AUTHOR_EMAIL: 'ada@example.invalid',
-    GIT_COMMITTER_NAME: 'Ada',
-    GIT_COMMITTER_EMAIL: 'ada@example.invalid',
-  });
+  repo.run(['merge', '-q', '--no-ff', '-m', 'merge side', 'side'], repo.as('Ada', START + 10 * DAY));
 
   const history = await historyOf(repo);
   assert.equal(history.commitCount, 4);
