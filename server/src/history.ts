@@ -1,3 +1,5 @@
+import type { CommitEvent, Grave } from './api-types.ts';
+
 // Separators git writes for us via %x1e / %x1f, so commit subjects can't break parsing.
 const RECORD = '\x1e';
 const FIELD = '\x1f';
@@ -15,23 +17,43 @@ export const LOG_ARGS = [
   'HEAD',
 ];
 
+export interface ParsedHistory {
+  graves: Grave[];
+  aliveFileCount: number;
+  commitCount: number;
+  contributorCount: number;
+  firstCommitAt: number | null;
+  lastCommitAt: number | null;
+}
+
+/** A file while it's alive: what its grave will say once it's deleted. */
+interface Life {
+  path: string;
+  formerNames: string[];
+  born: CommitEvent | null;
+  lastWords: CommitEvent | null;
+  touches: number;
+  authors: Set<string>;
+  lifeNumber: number;
+}
+
 /**
  * Walks the history oldest-first and tracks every file's life:
  * born on "A", renamed on "R", touched on "M", buried on "D".
  */
-export function parseHistory(text) {
-  const alive = new Map(); // path -> life
-  const buried = new Map(); // path -> grave, to ignore the same deletion on a parallel branch
-  const deathCounts = new Map(); // path -> how many times something at this path died
-  const graves = [];
-  const authors = new Set();
+export function parseHistory(text: string): ParsedHistory {
+  const alive = new Map<string, Life>();
+  const buried = new Map<string, Grave>(); // to ignore the same deletion on a parallel branch
+  const deathCounts = new Map<string, number>(); // how many times something at this path died
+  const graves: Grave[] = [];
+  const authors = new Set<string>();
   let commitCount = 0;
   let firstCommitAt = Infinity;
   let lastCommitAt = 0;
 
-  const birth = (path, event) => {
+  const birth = (path: string, event: CommitEvent | null): Life => {
     buried.delete(path);
-    const life = {
+    const life: Life = {
       path,
       formerNames: [],
       born: event,
@@ -44,7 +66,7 @@ export function parseHistory(text) {
     return life;
   };
 
-  const touch = (life, event) => {
+  const touch = (life: Life, event: CommitEvent) => {
     life.lastWords = event;
     life.touches++;
     life.authors.add(event.author);
@@ -53,18 +75,17 @@ export function parseHistory(text) {
   for (const block of text.split(RECORD)) {
     if (!block.trim()) continue;
     const lines = block.split('\n');
-    const [hash, author, timestamp, ...subject] = lines[0].split(FIELD);
-    const event = { hash, author, at: Number(timestamp) * 1000, message: subject.join(FIELD) };
+    const [hash = '', author = '', timestamp, ...subject] = (lines[0] ?? '').split(FIELD);
+    const event: CommitEvent = { hash, author, at: Number(timestamp) * 1000, message: subject.join(FIELD) };
 
     commitCount++;
     authors.add(author);
     firstCommitAt = Math.min(firstCommitAt, event.at);
     lastCommitAt = Math.max(lastCommitAt, event.at);
 
-    const changes = [];
-    const deletedLines = new Map(); // path -> lines removed (null for binary)
-    for (let i = 1; i < lines.length; i++) {
-      const line = lines[i];
+    const changes: { status: string | undefined; paths: string[] }[] = [];
+    const deletedLines = new Map<string, number | null>(); // lines removed; null for binary
+    for (const line of lines.slice(1)) {
       if (!line) continue;
       if (line[0] === ':') {
         // ":100644 000000 <sha> <sha> D\tpath" or ":... R087\told\tnew"
@@ -73,12 +94,13 @@ export function parseHistory(text) {
         changes.push({ status: status[0], paths: line.slice(tab + 1).split('\t').map(unquotePath) });
       } else {
         const numstat = /^(\d+|-)\t(\d+|-)\t(.*)$/.exec(line);
-        if (numstat) deletedLines.set(unquotePath(numstat[3]), numstat[2] === '-' ? null : Number(numstat[2]));
+        if (numstat) deletedLines.set(unquotePath(numstat[3]!), numstat[2] === '-' ? null : Number(numstat[2]));
       }
     }
 
     for (const { status, paths } of changes) {
       const [path, newPath] = paths;
+      if (path === undefined) continue;
       switch (status) {
         case 'A':
         case 'C': {
@@ -95,6 +117,7 @@ export function parseHistory(text) {
           break;
         }
         case 'R': {
+          if (newPath === undefined) break;
           const life = alive.get(path) ?? birth(path, null);
           alive.delete(path);
           life.formerNames.push(path);
@@ -111,8 +134,8 @@ export function parseHistory(text) {
           }
           alive.delete(path);
           deathCounts.set(path, (deathCounts.get(path) ?? 0) + 1);
-          const lines = deletedLines.has(path) ? deletedLines.get(path) : undefined;
-          const grave = {
+          const lines = deletedLines.get(path); // undefined when git printed no numstat line
+          const grave: Grave = {
             path,
             formerNames: life.formerNames,
             born: life.born,
@@ -142,20 +165,20 @@ export function parseHistory(text) {
   };
 }
 
-const ESCAPES = { a: 7, b: 8, t: 9, n: 10, v: 11, f: 12, r: 13, '"': 34, '\\': 92 };
+const ESCAPES: Record<string, number> = { a: 7, b: 8, t: 9, n: 10, v: 11, f: 12, r: 13, '"': 34, '\\': 92 };
 
 /** Git C-quotes paths containing tabs, newlines, quotes or backslashes. */
-export function unquotePath(path) {
+export function unquotePath(path: string): string {
   if (path.length < 2 || path[0] !== '"' || path.at(-1) !== '"') return path;
-  const bytes = [];
+  const bytes: number[] = [];
   const body = path.slice(1, -1);
   for (let i = 0; i < body.length; i++) {
-    const ch = body[i];
+    const ch = body[i]!;
     if (ch !== '\\') {
       bytes.push(...Buffer.from(ch, 'utf8'));
       continue;
     }
-    const next = body[++i];
+    const next = body[++i] ?? '';
     if (/[0-7]/.test(next)) {
       bytes.push(parseInt(body.slice(i, i + 3), 8));
       i += 2;

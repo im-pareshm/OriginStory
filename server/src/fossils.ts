@@ -1,7 +1,8 @@
-import { hashString, isCodeFile, isFossilCandidate, isMeaningful, parseBlame, parseTree } from './blame.js';
-import { dig, repoBasics } from './dig.js';
-import { git } from './git.js';
-import { fileUrl } from './url.js';
+import type { CommitEvent, Core, Fossil, FossilsData, Layer } from './api-types.ts';
+import { type Blame, hashString, isCodeFile, isFossilCandidate, isMeaningful, parseBlame, parseTree } from './blame.ts';
+import { dig, repoBasics } from './dig.ts';
+import { git } from './git.ts';
+import { fileUrl, type NormalizedRepo } from './url.ts';
 
 // Blame is the slow part. A fixed sample keeps big repos to about a minute, and because
 // the sample is chosen by path hash, the same repo gives the same answer every visit.
@@ -13,7 +14,7 @@ const MAX_FOSSILS = 12;
 const MAX_FOSSIL_TEXT = 160;
 
 /** Dates every surviving line in a sample of the repo's files with `git blame`. */
-export function getFossils(repo) {
+export function getFossils(repo: NormalizedRepo): Promise<FossilsData> {
   return dig(repo, 'fossils', (gitDir) => buildFossils(repo, gitDir));
 }
 
@@ -21,7 +22,11 @@ export function getFossils(repo) {
  * The fossils exhibit for the clone at `gitDir`. Separate from `getFossils` so tests can
  * run it on a local repo; the options exist only so tests can shrink the limits.
  */
-export async function buildFossils(repo, gitDir, { maxFiles = MAX_FILES, budgetMs = BUDGET_MS } = {}) {
+export async function buildFossils(
+  repo: NormalizedRepo,
+  gitDir: string,
+  { maxFiles = MAX_FILES, budgetMs = BUDGET_MS } = {},
+): Promise<FossilsData> {
   const [tree, basics] = await Promise.all([
     git(['ls-tree', '-r', '-l', '-z', 'HEAD'], { cwd: gitDir }),
     repoBasics(repo, gitDir),
@@ -36,7 +41,7 @@ export async function buildFossils(repo, gitDir, { maxFiles = MAX_FILES, budgetM
   const strata = new Strata();
   const attempted = await blameEach(gitDir, sample, Date.now() + budgetMs, (path, blame) => strata.add(path, blame));
 
-  const cores = strata.orderedCores().map(({ oldest, ...core }) => ({
+  const cores: Core[] = strata.orderedCores().map(({ oldest, ...core }) => ({
     ...core,
     oldest: oldest && {
       path: core.path,
@@ -51,7 +56,7 @@ export async function buildFossils(repo, gitDir, { maxFiles = MAX_FILES, budgetM
     repo: basics,
     layers: strata.layers(),
     cores,
-    fossils: pickFossils(cores.map((core) => core.oldest).filter(Boolean)),
+    fossils: pickFossils(cores.map((core) => core.oldest).filter((fossil) => fossil !== null)),
     sample: {
       blamed: cores.length,
       eligible: eligible.length,
@@ -64,7 +69,7 @@ export async function buildFossils(repo, gitDir, { maxFiles = MAX_FILES, budgetM
 }
 
 /** Up to `max` paths, chosen by path hash so the same repo always gives the same sample. */
-export function pickSample(paths, max = MAX_FILES) {
+export function pickSample(paths: string[], max = MAX_FILES): string[] {
   return [...paths].sort((a, b) => hashString(a) - hashString(b) || a.localeCompare(b)).slice(0, max);
 }
 
@@ -73,10 +78,10 @@ export function pickSample(paths, max = MAX_FILES) {
  * little code), then oldest first. A line that survives in many files (a license header,
  * "Module dependencies.") shows once.
  */
-export function pickFossils(candidates, max = MAX_FOSSILS) {
-  const seen = new Set();
+export function pickFossils(candidates: Fossil[], max = MAX_FOSSILS): Fossil[] {
+  const seen = new Set<string>();
   return [...candidates]
-    .sort((a, b) => isCodeFile(b.path) - isCodeFile(a.path) || a.commit.at - b.commit.at || a.path.localeCompare(b.path))
+    .sort((a, b) => Number(isCodeFile(b.path)) - Number(isCodeFile(a.path)) || a.commit.at - b.commit.at || a.path.localeCompare(b.path))
     .filter((fossil) => !seen.has(fossil.text) && seen.add(fossil.text))
     .slice(0, max);
 }
@@ -85,16 +90,16 @@ export function pickFossils(candidates, max = MAX_FOSSILS) {
  * Runs blame over `paths` a few at a time, stopping new work once the deadline passes.
  * Resolves with how many paths were attempted.
  */
-async function blameEach(gitDir, paths, deadline, onBlame) {
+async function blameEach(gitDir: string, paths: string[], deadline: number, onBlame: (path: string, blame: Blame) => void): Promise<number> {
   let next = 0;
   const worker = async () => {
     while (next < paths.length && Date.now() < deadline) {
-      const path = paths[next++];
-      let output;
+      const path = paths[next++]!;
+      let output: string;
       try {
         output = await git(['blame', '--porcelain', '-w', 'HEAD', '--', path], { cwd: gitDir, timeoutMs: BLAME_TIMEOUT_MS });
       } catch (err) {
-        if (err.message.startsWith('Could not run git')) throw err;
+        if (err instanceof Error && err.message.startsWith('Could not run git')) throw err;
         continue; // one stubborn file shouldn't sink the exhibit
       }
       const blame = parseBlame(output);
@@ -105,21 +110,29 @@ async function blameEach(gitDir, paths, deadline, onBlame) {
   return next;
 }
 
-const monthOf = (at) => {
+const monthOf = (at: number) => {
   const date = new Date(at);
   return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
 };
 
+/** A file's core before its oldest line is trimmed and linked. */
+interface RawCore {
+  path: string;
+  lines: number;
+  runs: [year: number, count: number][];
+  oldest: { line: number; text: string; commit: CommitEvent } | null;
+}
+
 /** Accumulates blamed files into monthly layers and per-file cores as they arrive. */
 export class Strata {
-  months = new Map(); // 'YYYY-MM' -> { lines, authors: Map<name, lines> }
-  cores = [];
+  months = new Map<string, { lines: number; authors: Map<string, number> }>(); // keyed 'YYYY-MM'
+  cores: RawCore[] = [];
 
-  add(path, { commits, lines }) {
-    const runs = [];
-    let oldest = null;
+  add(path: string, { commits, lines }: Blame): void {
+    const runs: RawCore['runs'] = [];
+    let oldest: RawCore['oldest'] = null;
     for (const { sha, line, text } of lines) {
-      const commit = commits.get(sha);
+      const commit = commits.get(sha)!; // parseBlame registers every sha a line points at
       const month = monthOf(commit.at);
       let layer = this.months.get(month);
       if (!layer) this.months.set(month, (layer = { lines: 0, authors: new Map() }));
@@ -137,11 +150,11 @@ export class Strata {
   }
 
   /** Cores by path. Blames finish in any order; sorting keeps every visit's answer the same. */
-  orderedCores() {
+  orderedCores(): RawCore[] {
     return [...this.cores].sort((a, b) => a.path.localeCompare(b.path));
   }
 
-  layers() {
+  layers(): Layer[] {
     return [...this.months]
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([month, { lines, authors }]) => ({

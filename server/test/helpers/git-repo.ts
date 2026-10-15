@@ -16,25 +16,38 @@ const scratch = mkdtempSync(join(tmpdir(), 'repo-museum-test-'));
 after(() => rmSync(scratch, { recursive: true, force: true }));
 
 /** The temp folder for this test file; removed after its last test. */
-export const scratchDir = () => scratch;
+export const scratchDir = (): string => scratch;
 
 /** Text with `n` numbered lines. */
-export const lines = (n, prefix = 'line') => Array.from({ length: n }, (_, i) => `${prefix} ${i + 1}`).join('\n') + '\n';
+export const lines = (n: number, prefix = 'line'): string => Array.from({ length: n }, (_, i) => `${prefix} ${i + 1}`).join('\n') + '\n';
 
-const identity = (author) => ({
+const identity = (author: string) => ({
   name: author,
   email: `${author.toLowerCase().replace(/\s+/g, '.')}@example.invalid`,
 });
+
+export interface TestRepo {
+  dir: string;
+  /** Runs git in the repo and returns stdout. */
+  run(args: string[], env?: NodeJS.ProcessEnv): string;
+  /** Env vars that make the next git command author and commit as `author` at `seconds`. */
+  as(author: string, seconds: number): NodeJS.ProcessEnv;
+  write(path: string, content: string | Buffer): void;
+  remove(path: string): void;
+  /** Commits everything as `author`, one day after the previous commit unless `at` (seconds) is given. */
+  commit(author: string, message: string, at?: number): void;
+  head(): string;
+}
 
 /**
  * A repo on branch `branch` where each commit is one day after the previous one, unless
  * `commit()` is given an explicit time.
  */
-export function createRepo(name, branch = 'trunk') {
+export function createRepo(name: string, branch = 'trunk'): TestRepo {
   const dir = join(scratchDir(), name);
   mkdirSync(dir);
   let day = 0;
-  const run = (args, env = {}) =>
+  const run = (args: string[], env: NodeJS.ProcessEnv = {}) =>
     execFileSync('git', ['-c', 'core.autocrlf=false', '-c', 'core.hooksPath=', '-c', 'commit.gpgsign=false', ...args], {
       cwd: dir,
       env: { ...process.env, ...env },
@@ -42,8 +55,7 @@ export function createRepo(name, branch = 'trunk') {
     });
   run(['init', '-q', '-b', branch]);
 
-  /** Env vars that make the next git command author and commit as `author` at `seconds`. */
-  const as = (author, seconds) => {
+  const as = (author: string, seconds: number): NodeJS.ProcessEnv => {
     const who = identity(author);
     const when = `@${seconds} +0000`;
     return {
@@ -67,7 +79,6 @@ export function createRepo(name, branch = 'trunk') {
     remove(path) {
       unlinkSync(join(dir, path));
     },
-    /** Commits everything as `author`, one day after the previous commit unless `at` (seconds) is given. */
     commit(author, message, at = START + day++ * DAY) {
       run(['add', '-A']);
       run(['commit', '-q', '--allow-empty', '-m', message], as(author, at));

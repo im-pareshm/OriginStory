@@ -1,11 +1,12 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { git, GitError } from './git.js';
-import { UserError } from './url.js';
+import type { RepoBasics } from './api-types.ts';
+import { git, GitError } from './git.ts';
+import { type NormalizedRepo, UserError } from './url.ts';
 
 const MAX_CONCURRENT_DIGS = 2;
-const inflight = new Map();
+const inflight = new Map<string, Promise<unknown>>();
 
 /**
  * Clones a normalized repo into a temp folder, runs `work(gitDir)` on it and deletes the
@@ -13,20 +14,26 @@ const inflight = new Map();
  * 2026-10-15 — see AGENTS.md). Requests for the same exhibit of the same repo that arrive
  * together share one dig.
  */
-export async function dig(repo, exhibit, work, { emptyMessage } = {}) {
+export async function dig<T>(
+  repo: NormalizedRepo,
+  exhibit: string,
+  work: (gitDir: string) => Promise<T>,
+  { emptyMessage }: { emptyMessage?: string } = {},
+): Promise<T> {
   // Cheap check first: fails fast on missing, private or empty repos, before any clone.
   await remoteHead(repo, emptyMessage);
 
   const key = `${exhibit}:${repo.key}`;
-  if (!inflight.has(key)) {
-    const job = withDigSlot(() => excavate(repo, work)).finally(() => inflight.delete(key));
+  let job = inflight.get(key) as Promise<T> | undefined;
+  if (!job) {
+    job = withDigSlot(() => excavate(repo, work)).finally(() => inflight.delete(key));
     inflight.set(key, job);
   }
-  return inflight.get(key);
+  return job;
 }
 
 /** What every exhibit says about the repo it was built from. */
-export async function repoBasics(repo, gitDir) {
+export async function repoBasics(repo: NormalizedRepo, gitDir: string): Promise<RepoBasics> {
   const [branch, head] = await Promise.all([
     git(['symbolic-ref', '--short', 'HEAD'], { cwd: gitDir }).catch(() => ''),
     git(['rev-parse', 'HEAD'], { cwd: gitDir }),
@@ -41,8 +48,8 @@ export async function repoBasics(repo, gitDir) {
   };
 }
 
-async function remoteHead(repo, emptyMessage = "That repository is empty. There's nothing to exhibit yet.") {
-  let output;
+async function remoteHead(repo: NormalizedRepo, emptyMessage = "That repository is empty. There's nothing to exhibit yet."): Promise<string> {
+  let output: string;
   try {
     output = await git(['ls-remote', '--', repo.cloneUrl, 'HEAD'], { timeoutMs: 20_000 });
   } catch (err) {
@@ -54,11 +61,11 @@ async function remoteHead(repo, emptyMessage = "That repository is empty. There'
 }
 
 /** The commit hash `git ls-remote <url> HEAD` reports for HEAD, or null for an empty repo. */
-export function headFromLsRemote(output) {
+export function headFromLsRemote(output: string): string | null {
   return output.split('\n').find((line) => line.endsWith('\tHEAD'))?.split('\t')[0] ?? null;
 }
 
-async function excavate(repo, work) {
+async function excavate<T>(repo: NormalizedRepo, work: (gitDir: string) => Promise<T>): Promise<T> {
   const workdir = await mkdtemp(join(tmpdir(), 'repo-museum-'));
   const gitDir = join(workdir, 'repo.git');
   try {
@@ -73,7 +80,7 @@ async function excavate(repo, work) {
 }
 
 /** Turns git failures into messages a visitor can act on; anything else passes through as a 500. */
-export function toUserError(err) {
+export function toUserError(err: unknown): unknown {
   if (err instanceof UserError) return err;
   if (err instanceof GitError) {
     if (err.timedOut) {
@@ -92,10 +99,10 @@ export function toUserError(err) {
 }
 
 let activeDigs = 0;
-const waiting = [];
+const waiting: (() => void)[] = [];
 
 /** Caps how many repos are cloned at once so a burst of visitors can't exhaust the machine. */
-export function withDigSlot(task) {
+export function withDigSlot<T>(task: () => Promise<T>): Promise<T> {
   return new Promise((resolve, reject) => {
     const run = () => {
       activeDigs++;

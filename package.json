@@ -2,7 +2,7 @@
   "name": "repo-museum",
   "private": true,
   "engines": {
-    "node": ">=22.12"
+    "node": ">=22.18"
   },
   "workspaces": [
     "server",
@@ -11,7 +11,7 @@
   "scripts": {
     "dev": "concurrently -n api,web -c yellow,cyan \"npm run dev -w server\" \"npm run dev -w web\"",
     "build": "npm run build -w web",
-    "typecheck": "npm run typecheck -w web",
+    "typecheck": "npm run typecheck --workspaces",
     "test": "npm test --workspaces",
     "prepare": "node scripts/install-hooks.mjs",
     "coverage": "npm run coverage --workspaces"
